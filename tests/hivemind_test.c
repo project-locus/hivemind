@@ -1,6 +1,5 @@
 #include "hivemind.h"
-#include "dbg.h"
-#include "a.h"
+#include <polyutils.h>
 
 hivemind_server_t ser;
 atomic uint32_t cnt = 0;

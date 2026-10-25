@@ -653,7 +653,7 @@ static x_socket_t x_udp_bound(remote_t from){
 
 static bool x_udp_reflect(x_socket_t s, ip_addr_t to, remote_t* from, bool extinfo){
 	struct sockaddr_in6 addr = {.sin6_family = AF_INET6};
-	addr.sin6_port = 0x1111;
+	addr.sin6_port = htons(9);
 	*(ip_addr_t*)&addr.sin6_addr = to;
 	socklen_t addrlen = sizeof(addr);
 	if(connect(s, (struct sockaddr*) &addr, addrlen)) return false;
@@ -762,7 +762,7 @@ static int x_udp_next_read(x_socket_t sock, remote_t* from, void* msg, size_t ma
 	return v;
 }
 static void x_udp_close(x_socket_t sock){
-	struct sockaddr_in6 addr = {.sin6_family = AF_INET6, .sin6_port = 0x1111};
+	struct sockaddr_in6 addr = {.sin6_family = AF_INET6, .sin6_port = htons(9)};
 	*(ip_addr_t*)&addr.sin6_addr = (ip_addr_t){};
 	// POSIX standard doesn't let us shutdown() a non-connected UDP socket
 	// We make the socket "invalid" by connecting to :: which disables all "real" reads.

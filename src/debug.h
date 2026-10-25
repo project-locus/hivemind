@@ -1,7 +1,7 @@
 #pragma once
 #include "plumbing.c"
 
-deprecate("Debug")
+deprecated("Debug")
 static void check_send(struct _hv_remote* state){
 	bool bypass = state->bypass_type == 1;
 	size_t sz = ring_buffer_size(&state->send_queue);
@@ -16,7 +16,7 @@ static void check_send(struct _hv_remote* state){
 	}
 }
 
-deprecate("Debug")
+deprecated("Debug")
 static bool validate_ack(struct _hv_remote* state, uint64_t seq){
 	size_t idx = (seq-state->recv_seq_lo);
 	if(idx > SIZE_MAX/sizeof(uintptr_t)) return true;
