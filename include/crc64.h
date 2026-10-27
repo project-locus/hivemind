@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdatomic.h>
 
 // Compute the crc64 checksum of a block of data using the Jones polynomial (`0x1AD93D23594C935A9`), using an initial value (different initial values will result in different checksums).
 uint64_t crc64(uint64_t init, const uint8_t* data, size_t len);
@@ -38,7 +39,6 @@ static uint64_t crc64__software(uint64_t x, const uint8_t *data, size_t len){
 #if __has_builtin(__builtin_cpu_supports)
 #define _CRC64_RISCV
 #define _CRC64_ARM_RISCV_TARGET __attribute__((target("zbc")))
-#include <stdatomic.h>
 #include <riscv_bitmanip.h>
 #endif
 #endif
@@ -50,7 +50,7 @@ static uint64_t crc64__software(uint64_t x, const uint8_t *data, size_t len){
 __attribute__((target("pclmul,sse4.1")))
 #endif
 static uint64_t crc64__simd(uint64_t crc, const uint8_t* data, size_t len){
-	static const __m128i rk1_rk2 = _mm_set_epi64x(0x381d0015c96f4444ull, 0xd9d7be7d505da32cull);
+	__m128i rk1_rk2 = _mm_set_epi64x(0x381d0015c96f4444ull, 0xd9d7be7d505da32cull);
 
 	if(len < 32) return crc64__software(crc, data, len);
 
@@ -85,7 +85,7 @@ static uint64_t crc64__decide(uint64_t crc, const uint8_t* data, size_t len){
 	atomic_store_explicit(&crc64__impl, impl, memory_order_relaxed);
 	impl(crc, data, len);
 }
-_CRC64_ALWAYSINLINE uint64_t crc64(uint64_t crc, const uint8_t* data, size_t len){ return atomic_load_explicit(&crc64__impl, memory_order_relaxed)(crc, data, len) };
+_CRC64_ALWAYSINLINE uint64_t crc64(uint64_t crc, const uint8_t* data, size_t len){ return atomic_load_explicit(&crc64__impl, memory_order_relaxed)(crc, data, len); };
 
 #elif defined(_CRC64_ARM_RISCV_TARGET)
 

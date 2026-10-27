@@ -36,8 +36,10 @@ void Poly1305(const uint8_t *in, size_t inlen, const uint8_t key[32], uint8_t ou
 
 #ifdef _MSC_VER
 	#define _CC20_P1305_ALWAYSINLINE __forceinline
+	#define _CC20_P1305_WEAKLINK __declspec(selectany)
 #else
 	#define _CC20_P1305_ALWAYSINLINE __attribute__((always_inline))
+	#define _CC20_P1305_WEAKLINK __attribute__((weak))
 #endif
 
 #if defined(_MSC_VER) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -156,7 +158,9 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 	for(int i = 0; i < 16; i++)
 		io[i] = _cc20_p1305_le32bswap(state[i] + io[i]);
 }
+
 #undef _cc20_p1305_CHACHA20_ROUND
+
 #if defined(__riscv)
 #if (defined(__GNUC__) || defined(__clang__)) && defined(__has_builtin)
 #if __has_builtin(__builtin_cpu_supports)
@@ -230,8 +234,8 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 		__riscv_vse32_v_u32m1((uint32_t*)io + 12, __riscv_vadd_vv_u32m1(d, __riscv_vle32_v_u32m1(io + 12, vl), vl), vl);
 	}
 
-	extern static void (*_Atomic ChaCha20_block_xor__impl)(uint32_t[16], uint8_t[64], uint32_t);
-	extern static void (*_Atomic ChaCha20_block__impl)(uint32_t[16]);
+	_CC20_P1305_WEAKLINK void (*_Atomic ChaCha20_block_xor__impl)(uint32_t[16], uint8_t[64], uint32_t);
+	_CC20_P1305_WEAKLINK void (*_Atomic ChaCha20_block__impl)(uint32_t[16]);
 	_CC20_P1305_ALWAYSINLINE static void _cc20_p1305_simd_decide(){
 		int supports = __builtin_cpu_supports("v") > 0 && __builtin_cpu_supports("zvkb") > 0;
 		atomic_store_explicit(&ChaCha20_block_xor__impl, supports ? ChaCha20_block_xor__simd : ChaCha20_block_xor__software, memory_order_relaxed);
@@ -248,7 +252,7 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 #endif
 #elif (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
 	#include <immintrin.h>
-	
+
 	#ifdef _MSC_VER
 		#define _CC20_P1305_SIMD static
 	#else
@@ -261,7 +265,7 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 		a = _mm_add_epi32(a, b); d = _mm_xor_si128(d, a); d = _mm_shuffle_epi8(d, rot8); \
 		c = _mm_add_epi32(c, d); b = _mm_xor_si128(b, c); b = _mm_xor_si128(_mm_slli_epi32(b, 7), _mm_srli_epi32(b, 25)); \
 	} while(0)
-	_CC20_P1305_SIMD ChaCha20_block_xor__simd(uint32_t in[16], uint8_t out[64], uint32_t n){
+	_CC20_P1305_SIMD void ChaCha20_block_xor__simd(uint32_t in[16], uint8_t out[64], uint32_t n){
 		const __m128i rot16 = _mm_set_epi8(13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2);
 		const __m128i rot8  = _mm_set_epi8(14, 13, 12, 15, 10, 9, 8, 11, 6, 5, 4, 7, 2, 1, 0, 3);
 
@@ -292,7 +296,7 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 		_mm_storeu_si128((__m128i*)(out + 48), _mm_xor_si128(d, _mm_loadu_si128((const __m128i*)(out + 48))));
 		if(--n){ in[12]++; out += 64; goto start; }
 	}
-	_CC20_P1305_SIMD ChaCha20_block__simd(uint32_t io[16]){
+	_CC20_P1305_SIMD void ChaCha20_block__simd(uint32_t io[16]){
 		const __m128i rot16 = _mm_set_epi8(13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2);
 		const __m128i rot8  = _mm_set_epi8(14, 13, 12, 15, 10, 9, 8, 11, 6, 5, 4, 7, 2, 1, 0, 3);
 
@@ -317,16 +321,19 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 		_mm_storeu_si128((__m128i*)(io + 32), _mm_add_epi32(c, _mm_loadu_si128((const __m128i*)(io + 8))));
 		_mm_storeu_si128((__m128i*)(io + 48), _mm_add_epi32(d, _mm_loadu_si128((const __m128i*)(io + 12))));
 	}
-	extern static void (*_Atomic ChaCha20_block_xor__impl)(uint32_t[16], uint8_t[64], uint32_t);
-	extern static void (*_Atomic ChaCha20_block__impl)(uint32_t[16]);
+
+	#undef _cc20_p1305_CHACHA20_ROUND
+
+	_CC20_P1305_WEAKLINK void (*_Atomic ChaCha20_block_xor__impl)(uint32_t[16], uint8_t[64], uint32_t);
+	_CC20_P1305_WEAKLINK void (*_Atomic ChaCha20_block__impl)(uint32_t[16]);
 	_CC20_P1305_ALWAYSINLINE static void _cc20_p1305_simd_decide(){		
-#ifdef _MSC_VER
+	#ifdef _MSC_VER
 		int cpuInfo[4];
 		__cpuid(cpuInfo, 1);
 		int supports = (cpuInfo[2] & (1 << 9));
-#else
+	#else
       int supports = __builtin_cpu_supports("ssse3") > 0;
-#endif
+	#endif
 		atomic_store_explicit(&ChaCha20_block_xor__impl, supports ? ChaCha20_block_xor__simd : ChaCha20_block_xor__software, memory_order_relaxed);
 		atomic_store_explicit(&ChaCha20_block__impl, supports ? ChaCha20_block__simd : ChaCha20_block__software, memory_order_relaxed);
 	}
@@ -342,16 +349,16 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 	static void ChaCha20_block__decide(uint32_t io[16]){
 		_cc20_p1305_simd_decide(); atomic_load_explicit(&ChaCha20_block__impl, memory_order_relaxed)(io);
 	}
-	static void (*_Atomic ChaCha20_block_xor__impl)(uint32_t[16], uint8_t[64], uint32_t) = ChaCha20_block_xor__decide;
-	static void (*_Atomic ChaCha20_block__impl)(uint32_t[16]) = ChaCha20_block__decide;
+	_CC20_P1305_WEAKLINK void (*_Atomic ChaCha20_block_xor__impl)(uint32_t[16], uint8_t[64], uint32_t) = ChaCha20_block_xor__decide;
+	_CC20_P1305_WEAKLINK void (*_Atomic ChaCha20_block__impl)(uint32_t[16]) = ChaCha20_block__decide;
 	_CC20_P1305_ALWAYSINLINE void ChaCha20_block_xor(uint32_t in[16], uint8_t out[64], uint32_t n){ atomic_load_explicit(&ChaCha20_block_xor__impl, memory_order_relaxed)(in, out, n); }
 	_CC20_P1305_ALWAYSINLINE void ChaCha20_block(uint32_t io[16]){ atomic_load_explicit(&ChaCha20_block__impl, memory_order_relaxed)(io); }
 	#undef _CC20_P1305_SIMD
 #endif
 #undef _CC20_P1305_ALWAYSINLINE
+#undef _CC20_P1305_WEAKLINK
 
 #endif
-#undef _cc20_p1305_CHACHA20_ROUND
 
 #define _cc20_p1305_POLY1305_LOAD(m0,m1,m2,m3,m4,buf) m0 = _cc20_p1305_le32bswap(((uint32_t*)buf)[0]); \
 	m1 = _cc20_p1305_le32bswap(((uint32_t*)buf)[1]); \
