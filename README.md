@@ -8,7 +8,7 @@ For node bindings, jump to [Getting started (node.js)](#getting-started-nodejs)
 
 Clang and `-flto` are preferred for performance. Architecture-specific optimizations such as SSE are detected automatically and (usually) do not need flags.
 ```bash
-clang -c src/main.c -Iinclude -O3 -mcx16 -Wall -Wextra -Wno-unused -std=c11 -pthread -flto -o hivemind.o \
+clang -c src/main.c -Iinclude -Ivqueue/include -O3 -mcx16 -Wall -Wextra -Wno-unused -std=c11 -pthread -flto -o hivemind.o \
 	&& ar rcs hivemind.a hivemind.o
 
 # Linked with -flto -lhivemind

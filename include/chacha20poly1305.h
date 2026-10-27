@@ -108,6 +108,8 @@ void ChaCha20_block(uint32_t io[16]){
 	vst1q_u32(io + 12, vaddq_u32(d, vld1q_u32(io + 12)));
 }
 
+#undef _cc20_p1305_CHACHA20_ROUND
+
 #else
 
 #define _cc20_p1305_CHACHA20_ROUND(a, b, c, d) \
@@ -154,6 +156,7 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 	for(int i = 0; i < 16; i++)
 		io[i] = _cc20_p1305_le32bswap(state[i] + io[i]);
 }
+#undef _cc20_p1305_CHACHA20_ROUND
 #if defined(__riscv)
 #if (defined(__GNUC__) || defined(__clang__)) && defined(__has_builtin)
 #if __has_builtin(__builtin_cpu_supports)
@@ -235,6 +238,8 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 		atomic_store_explicit(&ChaCha20_block__impl, supports ? ChaCha20_block__simd : ChaCha20_block__software, memory_order_relaxed);
 	}
 
+	#undef _cc20_p1305_CHACHA20_ROUND
+
 #else
 	#warning Compiling for RISC-V: Use a more recent compiler version that supports __builtin_cpu_supports. SIMD disabled
 #endif
@@ -242,6 +247,8 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 	#warning Compiling for RISC-V: Use a version of GCC or Clang that supports __has_builtin. SIMD disabled
 #endif
 #elif (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)) && (defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86))
+	#include <immintrin.h>
+	
 	#ifdef _MSC_VER
 		#define _CC20_P1305_SIMD static
 	#else
@@ -249,11 +256,11 @@ static inline void ChaCha20_block__software(uint32_t io[16]){
 	#endif
 
 	#define _cc20_p1305_CHACHA20_ROUND(a, b, c, d) do { \
-    a = _mm_add_epi32(a, b); d = _mm_xor_si128(d, a); d = _mm_shuffle_epi8(d, rot16); \
-    c = _mm_add_epi32(c, d); b = _mm_xor_si128(b, c); b = _mm_xor_si128(_mm_slli_epi32(b, 12), _mm_srli_epi32(b, 20)); \
-    a = _mm_add_epi32(a, b); d = _mm_xor_si128(d, a); d = _mm_shuffle_epi8(d, rot8); \
-    c = _mm_add_epi32(c, d); b = _mm_xor_si128(b, c); b = _mm_xor_si128(_mm_slli_epi32(b, 7), _mm_srli_epi32(b, 25)); \
-} while(0)
+		a = _mm_add_epi32(a, b); d = _mm_xor_si128(d, a); d = _mm_shuffle_epi8(d, rot16); \
+		c = _mm_add_epi32(c, d); b = _mm_xor_si128(b, c); b = _mm_xor_si128(_mm_slli_epi32(b, 12), _mm_srli_epi32(b, 20)); \
+		a = _mm_add_epi32(a, b); d = _mm_xor_si128(d, a); d = _mm_shuffle_epi8(d, rot8); \
+		c = _mm_add_epi32(c, d); b = _mm_xor_si128(b, c); b = _mm_xor_si128(_mm_slli_epi32(b, 7), _mm_srli_epi32(b, 25)); \
+	} while(0)
 	_CC20_P1305_SIMD ChaCha20_block_xor__simd(uint32_t in[16], uint8_t out[64], uint32_t n){
 		const __m128i rot16 = _mm_set_epi8(13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2);
 		const __m128i rot8  = _mm_set_epi8(14, 13, 12, 15, 10, 9, 8, 11, 6, 5, 4, 7, 2, 1, 0, 3);
