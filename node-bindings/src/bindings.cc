@@ -1,4 +1,3 @@
-#include <polyutils.h>
 #include <uv.h>
 #include <cstring>
 #include <cstdlib>
@@ -6,6 +5,7 @@
 #include <mutex>
 #include "utils.hh"
 #include <hivemind.h>
+#include <assert.h>
 
 #define SECOND_US 1000000
 
@@ -239,9 +239,9 @@ class HivemindServerJS : public Napi::ObjectWrap<HivemindServerJS>{
 		uv_loop_t* loop;
 		napi_status err;
 		err = napi_get_uv_event_loop(info.Env(), &loop);
-		assert(err == napi_ok, "napi_get_uv_event_loop");
+		assert(err == napi_ok && "napi_get_uv_event_loop");
 		int err2 = uv_async_init(loop, &async_handle, async_cb);
-		assert(!err2, "uv_async_init");
+		assert(!err2 && "uv_async_init");
 		async_handle.data = this;
 		if(!hivemind_start(&server_, r, test)){
 			uv_unref((uv_handle_t*)&async_handle);

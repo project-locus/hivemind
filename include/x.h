@@ -53,6 +53,7 @@ static const x_socket_t X_SOCKET_INVALID = (x_socket_t) INVALID_SOCKET;
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdatomic.h>
+#include <net/if.h>
 
 #define SIZEOF_X_HANDLE 4
 typedef int x_file_t;
@@ -60,6 +61,7 @@ typedef DIR* x_folder_list_t;
 static const x_file_t X_FILE_INVALID = (x_file_t) -1;
 typedef int x_socket_t;
 static const x_socket_t X_SOCKET_INVALID = (x_socket_t) -1;
+static const size_t INTERFACE_STR_MAX_LEN = IFNAMSIZ;
 #endif
 
 typedef union x_userdata{
@@ -117,7 +119,7 @@ typedef struct remote{
 	uint32_t interface;
 } remote_t;
 
-static const size_t IP_STR_MAX_LEN = 40, INTERFACE_STR_MAX_LEN;
+static const size_t IP_STR_MAX_LEN = 40;
 
 // Create a directory
 static bool x_mkdir(const char* name);
@@ -613,7 +615,6 @@ static x_socket_t x_udp_auto(void){
 	return fd;
 }
 
-static const size_t INTERFACE_STR_MAX_LEN = IFNAMSIZ;
 static uint32_t interface_from_str(const char* i){ return if_nametoindex(i); }
 static void interface_to_str(uint32_t i, char out[INTERFACE_STR_MAX_LEN]){ if(!if_indextoname(i, out)) out[0] = '\0'; }
 

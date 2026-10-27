@@ -83,7 +83,7 @@ static uint64_t crc64__decide(uint64_t crc, const uint8_t* data, size_t len){
 #endif
 	uint64_t (*impl)(uint64_t, const uint8_t*, size_t) = supports ? crc64__simd : crc64__software;
 	atomic_store_explicit(&crc64__impl, impl, memory_order_relaxed);
-	impl(crc, data, len);
+	return impl(crc, data, len);
 }
 _CRC64_ALWAYSINLINE uint64_t crc64(uint64_t crc, const uint8_t* data, size_t len){ return atomic_load_explicit(&crc64__impl, memory_order_relaxed)(crc, data, len); };
 
@@ -133,7 +133,7 @@ _CRC64_ALWAYSINLINE uint64_t crc64(uint64_t crc, const uint8_t* data, size_t len
 	static uint64_t crc64__decide(uint64_t crc, const uint8_t* data, size_t len){
 		uint64_t (*impl)(uint64_t, const uint8_t*, size_t) = __builtin_cpu_supports("zbc") > 0 ? crc64__simd : crc64__software;
 		atomic_store_explicit(&crc64__impl, impl, memory_order_relaxed);
-		impl(crc, data, len);
+		return impl(crc, data, len);
 	}
 	#undef _CRC64_RISCV
 #else

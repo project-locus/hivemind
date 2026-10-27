@@ -1,5 +1,5 @@
 NAPI_URL=https://raw.githubusercontent.com/nodejs/node-addon-api/refs/heads/main
-HIVEMIND_INCLUDE="../include ../vqueue ../headers"
+HIVEMIND_INCLUDE="../include ../vqueue ../vqueue/include ../headers"
 # Leave blank to dynamically link against hivemind (not recommended but maybe useful)
 HIVEMIND_SRC="../src/main.c"
 
