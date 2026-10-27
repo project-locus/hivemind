@@ -57,7 +57,7 @@ bool hivemind_start(hivemind_server_t* s, remote_t where, ip_addr_t reflect_test
 			lock_release(&_hv_meta.threads_lock, 1);
 			goto err2;
 		}
-		if(!x_event_queue_add(&_hv_meta.queue, sock, (union x_userdata_t){.ptr = s})){
+		if(!x_event_queue_add(&_hv_meta.queue, sock, (x_userdata_t){.ptr = s})){
 			x_event_queue_destroy(&_hv_meta.queue);
 			goto err3;
 		}
@@ -65,7 +65,7 @@ bool hivemind_start(hivemind_server_t* s, remote_t where, ip_addr_t reflect_test
 		_hv_meta.scale_changed = _hv_internal_clock();
 		atomic_store_explicit(&_hv_meta.scale_at, _hv_meta.scale_changed, memory_order_release);
 		thread_detach(thread_create(_hv_listen, 0, 0));
-	}else if(!x_event_queue_add(&_hv_meta.queue, sock, (union x_userdata_t){.ptr = s})) goto err2;
+	}else if(!x_event_queue_add(&_hv_meta.queue, sock, (x_userdata_t){.ptr = s})) goto err2;
 	hivemind_server_t* prev = atomic_load_explicit(&_hv_meta.servers, memory_order_relaxed);
 	if(prev) prev->prevp = &s->next;
 	atomic_init(&s->next, prev);
@@ -199,7 +199,7 @@ void hivemind_send(hivemind_server_t* s, const hivemind_pipe_t* to, const uint8_
 	bool last, long_encoding;
 	size_t total_size = 0;
 	size_t rsz = ring_buffer_size(&state->send_queue) / sizeof(struct _hv_send_packet*);
-	if unlikely(l == 1 || (tim-l) > s->message_timeout){
+	if unlikely(l == 1 || (tim-l) > _HV_STATE_LIFETIME){
 		if(!state->prevp){
 			state->send_unlocked_ref--;
 			_hv_time_lock_rel(&state->send_last_used, 1);

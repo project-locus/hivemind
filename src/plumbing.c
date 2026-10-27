@@ -249,7 +249,7 @@ static void _hv_ram_packed_kex(hivemind_server_t* s, struct _hv_remote* state, u
 
 static uint64_t _hv_ram_packed_kex_verify(hivemind_server_t* s, const remote_t* from, uint32_t out_key[static restrict 8], const uint32_t in_packet[static restrict 5]){
 	uint64_t t = epoch_now()/MILLISECOND_US, t1 = _hv_keyless_sig2(s, from, in_packet, out_key, 0, 0);
-	if((t>t1?t-t1:t1-t) > (s->message_timeout+999)/MILLISECOND_US) return 0;
+	if((t>t1?t-t1:t1-t) > _HV_STATE_LIFETIME/1000) return 0;
 #ifndef HIVEMIND_NO_RECV_TSF
 #ifdef THREAD_SPECULATION_FENCE_AVAILABLE
 	thread_speculation_fence();
@@ -617,7 +617,6 @@ static inline void _hv_finish(hivemind_server_t* s){
 	size_t buckets = (1<<s->buckets_exp)>>1;
 	struct _hv_remote** r = s->remote_buckets;
 	if(buckets < 2) r = (struct _hv_remote**) &s->remote_buckets;
-	uint64_t t = _hv_internal_clock(), life = s->message_timeout;
 	for(size_t i = 0; i < buckets; i++){
 		struct _hv_remote* state = r[i];
 		while(state){

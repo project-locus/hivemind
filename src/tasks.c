@@ -30,7 +30,6 @@ static inline void _hv_hazard_wait(void* target){
 
 static void _hv_remove_unused(hivemind_server_t* s, uint64_t t){
 	array_buffer_t candidates = {0};
-	uint64_t c = s->message_timeout;
 	shared_lock_acquire(&s->state_lock);
 	size_t buckets = (1<<s->buckets_exp&-2ull)>>1;
 	struct _hv_remote** l = s->remote_buckets;
@@ -41,11 +40,11 @@ static void _hv_remove_unused(hivemind_server_t* s, uint64_t t){
 			if(state->bypass_type&2){
 				struct _hv_remote_vq* state_vq = (struct _hv_remote_vq*) state;
 				uint64_t last_used = atomic_load_explicit(&state_vq->vq_last_used, memory_order_relaxed);
-				if(last_used-t > c) array_buffer_push(&candidates, &state, sizeof(struct _hv_remote*));
+				if(last_used-t > _HV_STATE_LIFETIME) array_buffer_push(&candidates, &state, sizeof(struct _hv_remote*));
 			}else{
 				uint64_t r = atomic_load_explicit(&state->recv_last_used, memory_order_relaxed);
 				uint64_t s = atomic_load_explicit(&state->send_last_used, memory_order_relaxed);
-				if(r && s && (r-t+1)>>1 > c && s-t > c){
+				if(r && s && (r-t+1)>>1 > _HV_STATE_LIFETIME && s-t > _HV_STATE_LIFETIME){
 					array_buffer_push(&candidates, &state, sizeof(struct _hv_remote*));
 				}
 			}
@@ -66,14 +65,14 @@ static void _hv_remove_unused(hivemind_server_t* s, uint64_t t){
 			uint32_t ref = atomic_load_explicit(&state_vq->ref, memory_order_acquire);
 			if(ref) continue;
 			uint64_t last_used = atomic_load_explicit(&state_vq->vq_last_used, memory_order_relaxed);
-			if(last_used-t <= c) continue;
+			if(last_used-t <= _HV_STATE_LIFETIME) continue;
 			vqueue_close(&state_vq->q);
 			prevp = state_vq->prevp;
 		}else{
 			uint64_t r = _hv_time_lock_acq(&state->recv_last_used);
 			uint64_t s = _hv_time_lock_acq(&state->send_last_used);
 			t = _hv_internal_clock();
-			if(state->send_unlocked_ref || state->recv_unlocked_ref || atomic_load_explicit(&state->undrained_next, memory_order_relaxed) || atomic_load_explicit(&state->unsent_ack_next, memory_order_relaxed) || (r-t+1)>>1 <= c || s-t <= c){
+			if(state->send_unlocked_ref || state->recv_unlocked_ref || atomic_load_explicit(&state->undrained_next, memory_order_relaxed) || atomic_load_explicit(&state->unsent_ack_next, memory_order_relaxed) || (r-t+1)>>1 <= _HV_STATE_LIFETIME || s-t <= _HV_STATE_LIFETIME){
 				_hv_time_lock_rel(&state->recv_last_used, r);
 				_hv_time_lock_rel(&state->send_last_used, s);
 				continue;
@@ -1197,7 +1196,7 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 				}
 				uint64_t crcinit = (uint64_t)le32toh(*(uint32_t*)(packet+8)) | (uint64_t)le32toh(*(uint32_t*)(packet+16))<<32;
 				uint64_t t = epoch_now()/MILLISECOND_US, t1 = crcinit>>8;
-				if((t>t1?t-t1:t1-t) > (s->message_timeout+999)/MILLISECOND_US)
+				if((t>t1?t-t1:t1-t) > _HV_STATE_LIFETIME/1000)
 					continue; // replay
 				uint64_t dhash = _hv_mix64_addr(s->addr, le16toh(s->port_le)), shash = _hv_mix64_addr(from.addr, from.port);
 				*(uint32_t*)packet = htole32(shash); *(uint32_t*)(packet+4) = htole32(shash>>32);
@@ -1390,7 +1389,7 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 			uint32_t tag[4], *ptag = (uint32_t*)packet;
 			uint32_t poly_key[8];
 			uint64_t t = epoch_now()/MILLISECOND_US, t1 = _hv_keyless_sig2(s, &from, knonce, poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2);
-			if((t>t1?t-t1:t1-t) > (s->message_timeout+999)/MILLISECOND_US)
+			if((t>t1?t-t1:t1-t) > _HV_STATE_LIFETIME/1000)
 				continue; // replay
 			*(uint32_t*)(packet+36) = htole32(opts<<8);
 			if(payload_len) Poly1305(packet+36, payload_len+4, (uint8_t*)poly_key, (uint8_t*)tag);

@@ -275,6 +275,7 @@ struct hivemind_server{
 	hivemind_generic_fn_t open_close_cb;
 	hivemind_pipe_finish_fn_t finish_cb;
 	uint32_t master_key[8];
+
 #ifdef __SIZEOF_INT128__
 	union{
 		atomic(uint128_t) _id;
@@ -396,6 +397,7 @@ static void _hv_time_lock_acq_excl(atomic(uint64_t)* ptr, uint32_t* ref){
 
 #define _HV_SEND_BURST 6000
 #define _HV_SEND_TICK 2000 // 2ms in useconds
+#define _HV_STATE_LIFETIME 14400000000 // 4h in useconds
 
 // Resolve a 96-bit sequence number from the low 32 bits and a reference sequence number
 // The returned sequence number is within +/- 2^31 of the reference sequence number

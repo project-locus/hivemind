@@ -470,7 +470,7 @@ static const unsigned X_FILE_SEQUENTIAL = O_CLOEXEC; // flag that doesn't need t
 	static const unsigned X_FILE_READ_THROUGH = O_DIRECT;
 	#define _X_OPEN_FLAG_MASK ~0
 #else
-	static const unsigned X_FILE_READ_THROUGH = O_ASYNC; // flag that we're not gonna use
+	static const unsigned X_FILE_READ_THROUGH = O_ASYNC; // dummy flag that we're not gonna use
 	#define _X_OPEN_FLAG_MASK ~O_ASYNC
 #endif
 static const unsigned X_FILE_WRITE_THROUGH = O_SYNC;
