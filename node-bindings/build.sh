@@ -51,7 +51,10 @@ HIVEMIND_INCLUDE="$(printf -- '-I%s ' $HIVEMIND_INCLUDE)"
 	"$CC" -c $HIVEMIND_INCLUDE $HIVEMIND_SRC -std=c17 $FLAGS $EXTRA_FLAGS -fPIC -o dst/hivemind.o || fail
 	HIVEMIND_SRC="dst/hivemind.o"
 }
+[ clang -shared -latomic -o /dev/null ] && EXTRA_FLAGS="$EXTRA_FLAGS -latomic"
+
 printf "\e[A\e[2K%s -shared -O3 src/bindings.cc -lhivemind -o hivemind.node\r\n" "$CXX"
 $CXX -Idst $HIVEMIND_INCLUDE -I$(dirname "$(command -v node)")/../include/node -std=c++20 $FLAGS $EXTRA_FLAGS -fno-exceptions -DNODE_ADDON_API_DISABLE_CPP_EXCEPTIONS -fPIC -shared src/bindings.cc $HIVEMIND_SRC -Wl,-undefined,dynamic_lookup -o hivemind.node || fail
 [ -n "${KEEP_DST+x}" ] || rm -rf dst
+
 printf '\e[A\e[2K\e[92m  *** Build Succeeded in %ds ***\e[m\r\n' "$(($(date +%s) - start))"
