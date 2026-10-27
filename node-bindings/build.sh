@@ -3,8 +3,8 @@ HIVEMIND_INCLUDE="../include ../vqueue ../vqueue/include ../headers"
 # Leave blank to dynamically link against hivemind (not recommended but maybe useful)
 HIVEMIND_SRC="../src/main.c"
 
-FLAGS="-Wno-vla -Wno-unused -Wno-deprecated -DNO_STDIO -DNDEBUG -flto -O3 -Wall -Wextra -Wno-unused -Wno-unused-parameter -Wno-unused-command-line-argument"
-[ -n "${EXTRA_FLAGS+x}" ] || [ "$(uname -s)" = "Darwin" ] || EXTRA_FLAGS="-fuse-ld=lld" # Flags that are ignored when not using clang
+FLAGS="-Wno-vla -Wno-unused -Wno-deprecated -DNO_STDIO -DNDEBUG -flto -O3 -Wall -Wextra -Wno-unused -Wno-unused-parameter -Wno-unused-command-line-argument -march=native"
+[ -n "${EXTRA_FLAGS+x}" ] || which lld >/dev/null 2>&1 && EXTRA_FLAGS="-fuse-ld=lld" # Flags that are ignored when not using clang
 
 if [ -n "${TEST+x}" ]; then
 	FLAGS="-Wno-vla -Wno-unused -Wno-deprecated -DNO_SOFT_ASSERT -DHIVEMIND_NO_LOCAL_BYPASS -g3 -fsanitize=address,undefined -Wall -Wextra -Werror -Wno-unused -Wno-unused-parameter -Wno-unused-command-line-argument"

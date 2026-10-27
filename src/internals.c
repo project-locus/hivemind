@@ -305,53 +305,56 @@ struct hivemind_server{
 static_assert(sizeof(hivemind_server_t) == 256);
 
 #ifdef __SIZEOF_INT128__
-static void _hv_alloc_id(hivemind_server_t* s, uint32_t out[5], uint64_t t){
-	uint128_t v = atomic_fetch_add_explicit(&s->_id, 1, memory_order_relaxed);
-	out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff|v>>96<<24);
-	out[2] = htole32(v>>64); out[3] = htole32(v>>32);
-	out[4] = htole32(v);
-}
-static void _hv_nalloc_id(hivemind_server_t* s, uint32_t out[5]){
-	uint64_t t = epoch_now()/MILLISECOND_US;
-	uint128_t v = atomic_load_explicit(&s->_id, memory_order_relaxed);
-	out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff|v>>96<<24);
-	out[2] = htole32(v>>64); out[3] = htole32(v>>32);
-	out[4] = htole32(v);
-}
-static inline uint64_t _hv_alloc_id_short(hivemind_server_t* s){
-	uint64_t t = epoch_now()/MILLISECOND_US;
-	uint64_t lo = (uint64_t)atomic_fetch_add_explicit(&s->_id, 1, memory_order_relaxed);
-	return t<<8|(lo&0xff);
-}
+	#pragma clang diagnostic push
+	#pragma clang diagnostic ignored "-Watomic-alignment"
+	static void _hv_alloc_id(hivemind_server_t* s, uint32_t out[5], uint64_t t){
+		uint128_t v = atomic_fetch_add_explicit(&s->_id, 1, memory_order_relaxed);
+		out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff|v>>96<<24);
+		out[2] = htole32(v>>64); out[3] = htole32(v>>32);
+		out[4] = htole32(v);
+	}
+	static void _hv_nalloc_id(hivemind_server_t* s, uint32_t out[5]){
+		uint64_t t = epoch_now()/MILLISECOND_US;
+		uint128_t v = atomic_load_explicit(&s->_id, memory_order_relaxed);
+		out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff|v>>96<<24);
+		out[2] = htole32(v>>64); out[3] = htole32(v>>32);
+		out[4] = htole32(v);
+	}
+	static inline uint64_t _hv_alloc_id_short(hivemind_server_t* s){
+		uint64_t t = epoch_now()/MILLISECOND_US;
+		uint64_t lo = (uint64_t)atomic_fetch_add_explicit(&s->_id, 1, memory_order_relaxed);
+		return t<<8|(lo&0xff);
+	}
+	#pragma clang diagnostic pop
 #else
-#warning No 16-byte atomic primitive detected. If they are available, consider compiling with appropriate flags, e.g -mcx16. Falling back to lock-based approach
-static void _hv_alloc_id(hivemind_server_t* s, uint32_t out[5], uint64_t t){
-	uint8_t spin = 32;
-	while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
-	uint64_t lo = s->_id_lo++, hi = s->_id_hi; if(lo == -1ull) s->_id_hi = hi+1;
-	atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
-	out[0] = htole32(t); out[1] = htole32(t<<8>>40|hi>>32<<24);
-	out[2] = htole32(hi); out[3] = htole32(lo>>32);
-	out[4] = htole32(lo);
-}
-static void _hv_nalloc_id(hivemind_server_t* s, uint32_t out[5]){
-	uint64_t t = epoch_now()/MILLISECOND_US;
-	uint8_t spin = 32;
-	while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
-	uint64_t lo = s->_id_lo, hi = s->_id_hi;
-	atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
-	out[0] = htole32(t); out[1] = htole32(t<<8>>40|hi>>32<<24);
-	out[2] = htole32(hi); out[3] = htole32(lo>>32);
-	out[4] = htole32(lo);
-}
-static inline uint64_t _hv_alloc_id_short(hivemind_server_t* s){
-	uint64_t t = epoch_now()/MILLISECOND_US;
-	uint8_t spin = 32;
-	while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
-	uint64_t lo = s->_id_lo++; if(lo == -1ull) s->_id_hi++;
-	atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
-	return t<<8|(lo&0xff);
-}
+	#warning No 16-byte atomic primitive detected. If they are available, consider compiling with appropriate flags, e.g -mcx16. Falling back to lock-based approach
+	static void _hv_alloc_id(hivemind_server_t* s, uint32_t out[5], uint64_t t){
+		uint8_t spin = 32;
+		while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
+		uint64_t lo = s->_id_lo++, hi = s->_id_hi; if(lo == -1ull) s->_id_hi = hi+1;
+		atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
+		out[0] = htole32(t); out[1] = htole32(t<<8>>40|hi>>32<<24);
+		out[2] = htole32(hi); out[3] = htole32(lo>>32);
+		out[4] = htole32(lo);
+	}
+	static void _hv_nalloc_id(hivemind_server_t* s, uint32_t out[5]){
+		uint64_t t = epoch_now()/MILLISECOND_US;
+		uint8_t spin = 32;
+		while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
+		uint64_t lo = s->_id_lo, hi = s->_id_hi;
+		atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
+		out[0] = htole32(t); out[1] = htole32(t<<8>>40|hi>>32<<24);
+		out[2] = htole32(hi); out[3] = htole32(lo>>32);
+		out[4] = htole32(lo);
+	}
+	static inline uint64_t _hv_alloc_id_short(hivemind_server_t* s){
+		uint64_t t = epoch_now()/MILLISECOND_US;
+		uint8_t spin = 32;
+		while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
+		uint64_t lo = s->_id_lo++; if(lo == -1ull) s->_id_hi++;
+		atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
+		return t<<8|(lo&0xff);
+	}
 #endif
 
 // Time-carrying lock. These locks are used both to protect a resource and signal when it was last used (for GC). States are:
