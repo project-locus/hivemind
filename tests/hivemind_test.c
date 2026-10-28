@@ -12,16 +12,18 @@ void on_msg(hivemind_server_t* s, void* udata, const uint8_t* data2, size_t len)
 		printf("\x1b[31m=== Fail ===\x1b[m\n");
 		if(len != sizeof(data)){
 			printf("Lengths didn't match: %zu != %zu\n", len, sizeof(data));
-		}else for(size_t i = 0; i < len; i++){
-			if(data[i] != data2[i]){
-				printf("From byte %zu didn't match:\n", i);
-				size_t dlen = len-i; if(dlen > 256) dlen = 256;
-				hexdump(data2+i, dlen); hexdump(data+i, dlen);
-				break;
+		}else{
+			for(size_t i = 0; i < len; i++){
+				if(data[i] != data2[i]){
+					printf("From byte %zu didn't match:\n", i);
+					size_t dlen = len-i; if(dlen > 256) dlen = 256;
+					hexdump(data2+i, dlen); hexdump(data+i, dlen);
+					break;
+				}
 			}
 		}
 		breakpoint();
-	}else printf("\x1b[32m=== Pass ===\x1b[m\n");
+	}else{ printf("\x1b[32m=== Pass ===\x1b[m\n"); }
 	if(atomic_fetch_add(&cnt, -1) == 1)
 		atomic_wake_condition(&cnt, 1);
 }
@@ -41,9 +43,7 @@ int main(){
 	if(x_getsize(f) < 32){
 		x_randombytes(MASTER_KEY, 32);
 		x_write(f, MASTER_KEY, 0, 32);
-	}else{
-		x_read(f, MASTER_KEY, 0, 32);
-	}
+	}else{ x_read(f, MASTER_KEY, 0, 32); }
 	x_close(f);
 	hivemind_init(&ser, MASTER_KEY, (void(*)(void*, void*, const uint8_t*, size_t)) on_msg);
 	if(!hivemind_start(&ser, (remote_t){{0}, PORT, 0, 0}, ip_from_string("127.0.0.1"))){

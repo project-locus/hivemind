@@ -31,7 +31,7 @@ static inline uint64_t rnd(void){
 	uint64_t x = rng_state;
 	x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
 	rng_state = x;
-	return x * 0x2545F4914F6CDD1Dull;
+	return x * 0x2545f4914f6cdd1dull;
 }
 // Uniform-ish in [0, n)
 static inline size_t rnd_n(size_t n){ return n ? (size_t)(rnd() % n) : 0; }
@@ -500,7 +500,7 @@ static void test_hash_table(void){
 			memset(ref, 0, sizeof(void*) << rank);
 		} break;
 		case 1: case 2: case 3: case 4: case 5: case 6: case 7: {
-			void* v = (void*)(uintptr_t)(rnd() & 0x00FFFFFFFFFFFFFFull);
+			void* v = (void*)(uintptr_t)(rnd() & 0x00ffffffffffffffull);
 			hash_table_put(&t, h, v);
 			ref[h & (((uint64_t)1<<rank)-1)] = v;
 		} break;
@@ -584,10 +584,10 @@ static void stress_check_shared(void){
 }
 
 static void* stress_thread(void* arg){
-	uint64_t r = (uint64_t)(uintptr_t)arg * 0x9E3779B97F4A7C15ull | 1;
+	uint64_t r = (uint64_t)(uintptr_t)arg * 0x9e3779b97f4a7c15ull | 1;
 	for(int i = 0; i < LOCK_ITERS; i++){
 		r ^= r >> 12; r ^= r << 25; r ^= r >> 27;
-		switch((r * 0x2545F4914F6CDD1Dull) >> 61){
+		switch((r * 0x2545f4914f6cdd1dull) >> 61){
 		case 0: case 1: case 2:
 			shared_lock_acquire(&stress_lock); stress_check_shared(); shared_lock_release(&stress_lock); break;
 		case 3:

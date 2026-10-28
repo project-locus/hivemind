@@ -397,7 +397,7 @@ void Poly1305(const uint8_t *in, size_t inlen, const uint8_t key[32], uint8_t ou
 #endif
 		if(inlen < 16){
 			buf[block = (int)inlen] = 1;
-		}else m4 = 0x1000000;
+		}else{ m4 = 0x1000000; }
 		memcpy(buf, in, block);
 
 		_cc20_p1305_POLY1305_LOAD(m0,m1,m2,m3,m4,buf)

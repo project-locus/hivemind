@@ -1,5 +1,5 @@
 /**
- * Relatively fast and low-level crc64 implementation using the Jones polynomial 0x1AD93D23594C935A9
+ * Relatively fast and low-level crc64 implementation using the Jones polynomial 0x1ad93d23594c935a9
  * Matthew Reiner, 2026
  * Available under the GPL 3.0 license
  * SIMD support for x86, arm and RISC-V
@@ -11,7 +11,7 @@
 #include <string.h>
 #include <stdatomic.h>
 
-// Compute the crc64 checksum of a block of data using the Jones polynomial (`0x1AD93D23594C935A9`), using an initial value (different initial values will result in different checksums).
+// Compute the crc64 checksum of a block of data using the Jones polynomial (`0x1ad93d23594c935a9`), using an initial value (different initial values will result in different checksums).
 uint64_t crc64(uint64_t init, const uint8_t* data, size_t len);
 
 #if defined(CRC64_IMPL) || defined(__INTELLISENSE__)

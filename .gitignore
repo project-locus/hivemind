@@ -11,6 +11,6 @@ node-bindings/yarn.lock
 node-bindings/dst
 node-bindings/*.node
 
-
+*.llm.md
 **/.DS_Store
 **/Thumbs.db

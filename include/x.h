@@ -298,10 +298,10 @@ static size_t x_read(x_file_t fd, void* buf, uint64_t start, size_t count){
 		// Learn the -O3 way and you will appreciate the beauty and fragility
 		// of what you almost broke by being impatient
 		do{
-			DWORD tot = ReadFile(fd, _buf, 0xFFFFF000, &bytesRead, &overlapped) ? bytesRead : 0;
-			if(tot < 0xFFFFF000)
+			DWORD tot = ReadFile(fd, _buf, 0xfffff000, &bytesRead, &overlapped) ? bytesRead : 0;
+			if(tot < 0xfffff000)
 				return (_buf-(char*)buf) + tot;
-			_buf += 0xFFFFF000; count -= 0xFFFFF000;
+			_buf += 0xfffff000; count -= 0xfffff000;
 			size_t b = _buf-(char*)buf;
 			overlapped.Offset = b;
 			overlapped.OffsetHigh = b>>32;
@@ -322,10 +322,10 @@ static size_t x_write(x_file_t fd, const void* buf, uint64_t start, size_t count
 	if(count > 0xffffffff){
 		// See the comment in the x_read() implementation
 		do{
-			DWORD tot = WriteFile(fd, _buf, 0xFFFFF000, &bytesWritten, &overlapped) ? bytesWritten : 0;
-			if(tot < 0xFFFFF000)
+			DWORD tot = WriteFile(fd, _buf, 0xfffff000, &bytesWritten, &overlapped) ? bytesWritten : 0;
+			if(tot < 0xfffff000)
 				return (_buf-(const char*)buf) + tot;
-			_buf += 0xFFFFF000; count -= 0xFFFFF000;
+			_buf += 0xfffff000; count -= 0xfffff000;
 			size_t b = _buf-(const char*)buf;
 			overlapped.Offset = b;
 			overlapped.OffsetHigh = b>>32;
@@ -683,7 +683,7 @@ static bool x_udp_reflect(x_socket_t s, ip_addr_t to, remote_t* from, bool extin
 		}else{
 			struct ifaddrs *ifap;
 			if(getifaddrs(&ifap)) return false;
-			if(!from->addr.dwords[0] && !from->addr.dwords[1] && from->addr.dwords[2] == ntohl(0x0000FFFF)){
+			if(!from->addr.dwords[0] && !from->addr.dwords[1] && from->addr.dwords[2] == ntohl(0x0000ffff)){
 				// ipv4
 				//o = 28;
 				for(struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next){
@@ -833,7 +833,7 @@ static x_event_t x_event_queue_wait(x_event_queue_t* queue, uint64_t timeout){
 				if(timeout >= rm) timeout -= rm;
 				else return (x_event_t){X_EVENT_TIMEOUT, {0}};
 				now = n2;
-			}else if(syscall(SYS_futex, &queue->_bits, FUTEX_WAIT_PRIVATE, wc, 0) && errno == EINTR) return (x_event_t){X_EVENT_SIGNAL, {0}};
+			}else if(syscall(SYS_futex, &queue->_bits, FUTEX_WAIT_PRIVATE, wc, 0) && errno == EINTR){ return (x_event_t){X_EVENT_SIGNAL, {0}}; }
 			wc = atomic_fetch_or_explicit(&queue->_bits, 1024, memory_order_acquire);
 		}
 	}
@@ -849,7 +849,7 @@ static x_event_t x_event_queue_wait(x_event_queue_t* queue, uint64_t timeout){
 			timeout -= INT_MAX*1000ull;
 			c = epoll_wait(queue->_fd, (struct epoll_event*) queue->_ev, _X_INLINE_EVENT_BUFFER, INT_MAX);
 			if(!c) goto a;
-		}else c = epoll_wait(queue->_fd, (struct epoll_event*) queue->_ev, _X_INLINE_EVENT_BUFFER, timeout==-1ull?-1:timeout/1000);
+		}else{ c = epoll_wait(queue->_fd, (struct epoll_event*) queue->_ev, _X_INLINE_EVENT_BUFFER, timeout==-1ull?-1:timeout/1000); }
 		if(c <= 0) ev = (x_event_t){c ? X_EVENT_SIGNAL : X_EVENT_TIMEOUT, {0}};
 		else{
 			wc = c<<5|1;
@@ -961,7 +961,7 @@ static x_event_t x_event_queue_wait(x_event_queue_t* queue, uint64_t timeout){
 				if(timeout > rm) timeout -= rm;
 				else return (x_event_t){X_EVENT_TIMEOUT, {0}};
 				now = n2;
-			}else if(syscall(SYS_ulock_wait, 0x1000001, &queue->_bits, wc,  0) && errno == EINTR) return (x_event_t){X_EVENT_SIGNAL, {0}};
+			}else if(syscall(SYS_ulock_wait, 0x1000001, &queue->_bits, wc,  0) && errno == EINTR){ return (x_event_t){X_EVENT_SIGNAL, {0}}; }
 			wc = atomic_fetch_or_explicit(&queue->_bits, 1024, memory_order_acquire);
 		}
 #else
@@ -981,10 +981,12 @@ static x_event_t x_event_queue_wait(x_event_queue_t* queue, uint64_t timeout){
 			uint64_t rm = (uint64_t)(ut._timeout.tv_sec - now.tv_sec) * 1000000 + (uint64_t)((ut._timeout.tv_nsec - now.tv_nsec)/1000);
 			if(timeout >= rm) timeout -= rm;
 			else else return (x_event_t){X_EVENT_TIMEOUT, {0}};
-		}else while(wc&1024){
-			if(_umtx_op(&queue->_bits, UMTX_OP_WAIT_UINT_PRIVATE, wc, 0, 0) && errno == EINTR)
-				return (x_event_t){X_EVENT_SIGNAL, {0}};
-			wc = atomic_fetch_or_explicit(&queue->_bits, 1024, memory_order_acquire);
+		}else{
+			while(wc&1024){
+				if(_umtx_op(&queue->_bits, UMTX_OP_WAIT_UINT_PRIVATE, wc, 0, 0) && errno == EINTR)
+					return (x_event_t){X_EVENT_SIGNAL, {0}};
+				wc = atomic_fetch_or_explicit(&queue->_bits, 1024, memory_order_acquire);
+			}
 		}
 #endif
 	}
@@ -1008,7 +1010,7 @@ static x_event_t x_event_queue_wait(x_event_queue_t* queue, uint64_t timeout){
 		for(int i = 0; i < c; i++){
 			uint32_t f = (uint16_t)evs[i].filter;
 			// -1 => 1, -2 => 4, -10 => 1024, -7 => 1024, -15 => 8
-			f = 1<<(0xA030A020u>>((f^f<<2)&28)&15);
+			f = 1<<(0xa030a020u>>((f^f<<2)&28)&15);
 			if(f & (X_EVENT_READABLE | X_EVENT_WRITABLE))
 				if(evs[i].flags&EV_EOF) f |= X_EVENT_EOF;
 			if((f & X_EVENT_WRITABLE) && evs[i].data == 1)

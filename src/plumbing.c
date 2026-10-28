@@ -13,9 +13,9 @@ struct _hv_tls_packet_detach{
 };
 thread_local struct _hv_tls_packet_detach* tls_packet_detach;
 static bool _hv_pipeid_in_range(const uint32_t test[5], const uint32_t b0[5], const uint32_t b1[5]){
-	uint64_t tn = (uint64_t)le32toh(test[0])<<24|((uint64_t)le32toh(test[1])&0xffffff);
-	uint64_t t0 = (uint64_t)le32toh(b0[0])<<24|((uint64_t)le32toh(b0[1])&0xffffff);
-	uint64_t t1 = (uint64_t)le32toh(b1[0])<<24|((uint64_t)le32toh(b1[1])&0xffffff);
+	uint64_t tn = (uint64_t)le32toh(test[0])<<24 | ((uint64_t)le32toh(test[1])&0xffffff);
+	uint64_t t0 = (uint64_t)le32toh(b0[0])<<24 | ((uint64_t)le32toh(b0[1])&0xffffff);
+	uint64_t t1 = (uint64_t)le32toh(b1[0])<<24 | ((uint64_t)le32toh(b1[1])&0xffffff);
 	if(tn < t0 || tn > t1) return false;
 	uint64_t hin = (uint64_t)(le32toh(test[1])>>24)<<32 | (uint64_t)le32toh(test[2]);
 	uint64_t hi0 = (uint64_t)(le32toh(b0[1])>>24)<<32 | (uint64_t)le32toh(b0[2]);
@@ -43,7 +43,7 @@ static void* _hv_pipe_acquire(hivemind_server_t* s, const uint32_t id[5]){
 		shared_lock_release(&s->pipes_lock);
 		return 0;
 	}
-	struct _hv_pipe* p = (struct _hv_pipe*) atomic_load_explicit(&s->pipes_data[hash&((1<<bexp)-1)], memory_order_acquire);
+	struct _hv_pipe* p = (struct _hv_pipe*)atomic_load_explicit(&s->pipes_data[hash&((1<<bexp)-1)], memory_order_acquire);
 	while(p){
 		if(!memcmp(p->id, id, 20))
 			break;
@@ -61,7 +61,7 @@ static void* _hv_pipe_acquire(hivemind_server_t* s, const uint32_t id[5]){
 }
 // Invoke the handler on a pipe from _hv_pipe_acquire, then release its slot (unless the handler already did via hivemind_pipe_unlock) and pipes_lock
 static inline void _hv_fire_pipe_end(hivemind_server_t* s, void* pipe, const uint8_t* data, size_t len, struct _hv_tls_packet_detach* d){
-	struct _hv_pipe* p = (struct _hv_pipe*) pipe;
+	struct _hv_pipe* p = (struct _hv_pipe*)pipe;
 	d->pipe_lock = &p->ref;
 	tls_packet_detach = d;
 	s->on_msg(s->udata, p->udata, data, len);
@@ -114,8 +114,8 @@ static void _hv_append_pipe(hivemind_server_t* s, uint32_t id[5], void* udata){
 				data2[hash&(b-1)] = (uintptr_t)(nh+i);
 				j++;
 			}
-			free(s->pipes_data);
-			s->pipes_data = (atomic(uintptr_t)*) data2;
+			_hv_free(s->pipes_data, (sizeof(atomic(uintptr_t)) + sizeof(struct _hv_pipe)*2) * ob);
+			s->pipes_data = (atomic(uintptr_t)*)data2;
 			i = j; atomic_init(&s->pipes_heap_i, j+1);
 		}
 		s->pipes_bucket_exp++;
@@ -139,7 +139,7 @@ static void* _hv_kill_pipe(hivemind_server_t* s, const uint32_t id[5]){
 	void* d = 0;
 	if(b){
 		atomic(uintptr_t)* op = &s->pipes_data[hash&(b-1)];
-		struct _hv_pipe* p = (struct _hv_pipe*) atomic_load_explicit(op, memory_order_acquire);
+		struct _hv_pipe* p = (struct _hv_pipe*)atomic_load_explicit(op, memory_order_acquire);
 		while(p){
 			if(!memcmp(p->id, id, 20))
 				break;
@@ -154,10 +154,10 @@ static void* _hv_kill_pipe(hivemind_server_t* s, const uint32_t id[5]){
 				// New nodes might be inserted here since this is the beginning
 				uintptr_t pv = (uintptr_t)p;
 				if(!atomic_compare_exchange_strong_explicit(op, &pv, next2, memory_order_release, memory_order_relaxed)) do{
-					op = &((struct _hv_pipe*) pv)->next;
+					op = &((struct _hv_pipe*)pv)->next;
 					pv = atomic_load_explicit(op, memory_order_acquire)&-2ull;
 				}while(pv != (uintptr_t)p);
-			}else atomic_store_explicit(op, next2, memory_order_release);
+			}else{ atomic_store_explicit(op, next2, memory_order_release); }
 			if(next2){
 				next2 = atomic_load_explicit(&((struct _hv_pipe*)next2)->next, memory_order_acquire);
 				if(next2&1){
@@ -175,7 +175,7 @@ static void* _hv_kill_pipe(hivemind_server_t* s, const uint32_t id[5]){
 					// Someone else is already cleaning up (upgrade fail guarantees an exclusive lock is already being acquired, and all paths that do that also clean up old pipes)
 					goto end;
 				}
-				free(s->pipes_data);
+				_hv_free(s->pipes_data, (sizeof(atomic(uintptr_t)) + sizeof(struct _hv_pipe)*2) * b);
 				s->pipes_data = 0;
 				atomic_init(&s->pipes_heap_i, 0);
 				s->pipes_bucket_exp = b = 0;
@@ -201,8 +201,8 @@ static void* _hv_kill_pipe(hivemind_server_t* s, const uint32_t id[5]){
 					data2[hash&(b-1)] = (uintptr_t)(nh+i);
 					j++;
 				}
-				free(s->pipes_data);
-				s->pipes_data = (atomic(uintptr_t)*) data2;
+				_hv_free(s->pipes_data, (sizeof(atomic(uintptr_t)) + sizeof(struct _hv_pipe)*2) * ob);
+				s->pipes_data = (atomic(uintptr_t)*)data2;
 				atomic_init(&s->pipes_heap_i, j);
 				s->pipes_bucket_exp--;
 				exclusive_lock_downgrade(&s->pipes_lock);
@@ -221,7 +221,7 @@ static inline void _hv_keyless_sig(hivemind_server_t* s, const remote_t* from, u
 	memcpy(chacha+4, s->master_key, 32);
 	for(unsigned i = 0; i < 4; i++) chacha[i+2] ^= le32toh(s->addr.dwords[i]);
 	for(unsigned i = 0; i < 4; i++) chacha[i+6] ^= le32toh(from->addr.dwords[i]);
-	chacha[10] ^= (uint32_t)(le16toh(s->port_le)<<16|from->port);
+	chacha[10] ^= (uint32_t)(le16toh(s->port_le)<<16 | from->port);
 	chacha[11] ^= le32toh(knonce[0]);
 	for(unsigned i = 0; i < 4; i++) chacha[12+i] = le32toh(knonce[i+1]);
 	ChaCha20_block(chacha);
@@ -233,13 +233,13 @@ static inline uint64_t _hv_keyless_sig2(hivemind_server_t* s, const remote_t* fr
 	memcpy(chacha+4, s->master_key, 32);
 	for(unsigned i = 0; i < 4; i++) chacha[i+2] ^= le32toh(from->addr.dwords[i]);
 	for(unsigned i = 0; i < 4; i++) chacha[i+6] ^= le32toh(s->addr.dwords[i]);
-	chacha[10] ^= (uint32_t)(from->port<<16|le16toh(s->port_le));
+	chacha[10] ^= (uint32_t)(from->port<<16 | le16toh(s->port_le));
 	chacha[11] ^= le32toh(knonce[0]);
 	for(unsigned i = 0; i < 4; i++) chacha[12+i] = le32toh(knonce[i+1]);
 	ChaCha20_block(chacha);
 	memcpy(out_tag, chacha, 32);
 	if(out_xor) for(unsigned i = 0; i < xor_count; i++) out_xor[i] ^= chacha[i+8];
-	return (uint64_t)le32toh(knonce[0])<<24|(uint64_t)(le32toh(knonce[1])&0xffffff);
+	return (uint64_t)le32toh(knonce[0])<<24 | (uint64_t)(le32toh(knonce[1])&0xffffff);
 }
 
 static void _hv_ram_packed_kex(hivemind_server_t* s, struct _hv_remote* state, uint32_t out_packet[static restrict 5]){
@@ -249,7 +249,7 @@ static void _hv_ram_packed_kex(hivemind_server_t* s, struct _hv_remote* state, u
 
 static uint64_t _hv_ram_packed_kex_verify(hivemind_server_t* s, const remote_t* from, uint32_t out_key[static restrict 8], const uint32_t in_packet[static restrict 5]){
 	uint64_t t = epoch_now()/MILLISECOND_US, t1 = _hv_keyless_sig2(s, from, in_packet, out_key, 0, 0);
-	if((t>t1?t-t1:t1-t) > _HV_STATE_LIFETIME/1000) return 0;
+	if((t > t1 ? t-t1 : t1-t) > _HV_STATE_LIFETIME/1000) return 0;
 #ifndef HIVEMIND_NO_RECV_TSF
 #ifdef THREAD_SPECULATION_FENCE_AVAILABLE
 	thread_speculation_fence();
@@ -316,7 +316,7 @@ static struct _hv_remote* _hv_state_find(hivemind_server_t* s, ip_addr_t addr, u
 	bool has_excl = false, use_vq;
 	retry: {}
 	struct _hv_remote** state = s->remote_buckets;
-	size_t buckets = (1<<s->buckets_exp&-2ull)>>1;
+	size_t buckets = (1<<s->buckets_exp & -2ull)>>1;
 	struct _hv_remote* p;
 	if(!buckets){
 		if(!(expect&_HV_FIND_CREATE)) fail: {
@@ -332,7 +332,7 @@ static struct _hv_remote* _hv_state_find(hivemind_server_t* s, ip_addr_t addr, u
 	}
 	// For just one bucket (up to 4 remotes) save an allocation
 	if(buckets > 1) p = state[hash&(buckets-1)];
-	else p = (struct _hv_remote*) state;
+	else p = (struct _hv_remote*)state;
 	while(p){
 		if(!memcmp(&p->addr, &addr, 16) && p->port == port){
 			if(has_excl) exclusive_lock_downgrade(&s->state_lock);
@@ -358,16 +358,17 @@ static struct _hv_remote* _hv_state_find(hivemind_server_t* s, ip_addr_t addr, u
 		if(buckets > 1){
 			for(size_t i = 0; i < buckets; i++)
 				_hv_split_by_hash(state[i], state2+i, buckets);
-		}else _hv_split_by_hash((struct _hv_remote*) state, state2, 1);
-		free(s->remote_buckets); s->remote_buckets = state = state2;
+			_hv_free(s->remote_buckets, sizeof(struct _hv_remote*) * buckets);
+		}else{ _hv_split_by_hash((struct _hv_remote*)state, state2, 1); }
+		s->remote_buckets = state = state2;
 		buckets <<= 1;
 	}
 	init: {}
 	// For just one bucket (up to 4 remotes) save an allocation
-	struct _hv_remote** onext = buckets > 1 ? &state[hash&(buckets-1)] : (struct _hv_remote**) &s->remote_buckets, *next = *onext;
+	struct _hv_remote** onext = buckets > 1 ? &state[hash&(buckets-1)] : (struct _hv_remote**)&s->remote_buckets, *next = *onext;
 	if(use_vq){
 		p = (struct _hv_remote*)_hv_alloc(sizeof(struct _hv_remote_vq));
-		struct _hv_remote_vq* p_vq = (struct _hv_remote_vq*) p;
+		struct _hv_remote_vq* p_vq = (struct _hv_remote_vq*)p;
 		memset(p_vq, 0, sizeof(*p_vq));
 		char name[56]; _hv_vq_name(name, addr, port);
 		p_vq->bypass_type = 2 + vqueue_open(&p_vq->q, name, sizeof(name));
@@ -426,7 +427,7 @@ static void _hv_encrypt_packet(uint32_t chacha[16], struct _hv_send_packet* p){
 	pl += num_blocks<<6;
 	uint32_t* end = p->payload4+p->len4;
 	for(unsigned i = 15; pl < end;) *--end ^= d[i];
-	
+
 	Poly1305((uint8_t*)pl, (size_t)((p->len4-hdr)<<2), (uint8_t*)d, (uint8_t*)(p->payload4+hdr));
 }
 
@@ -447,7 +448,7 @@ static inline void _hv_crcinitless_packet_finish(hivemind_server_t* s, const rem
 	*(uint32_t*)(packet+8) = htole32(dhash); *(uint32_t*)(packet+16) = htole32(dhash>>32);
 	*(uint32_t*)(packet+12) = htole32(opts<<8);
 	uint64_t id = _hv_alloc_id_short(s), crc = crc64(id, packet, payload_len + 20);
-	*(uint32_t*)(packet+8) = htole32(id); *(uint32_t*)(packet+16) = htole32(id>>32);	
+	*(uint32_t*)(packet+8) = htole32(id); *(uint32_t*)(packet+16) = htole32(id>>32);
 	*(uint32_t*)packet = htole32(crc); *(uint32_t*)(packet+4) = htole32(crc>>32);
 	bool send_success = x_udp_send(s->handle, *to, (char*)packet, payload_len + 21);
 	soft_assert(send_success);
@@ -477,10 +478,8 @@ void _hv_add_to_send_pipe(struct _hv_remote* state, const uint32_t id[restrict 5
 	if(array_buffer_size(&state->pipes_with_unsent) > sizeof(struct _hv_send_pipe)){
 		if(state->unsent_iter_i == (size_t)pos){
 			state->unsent_iter_i = 0;
-		}else if(state->unsent_iter_i && ((struct _hv_send_pipe*)(unsent_data + state->unsent_iter_i) - 1)->queued > pipe_state->queued){
-			state->unsent_iter_i = (size_t)pos;
-		}
-	}else state->unsent_iter_i = sizeof(struct _hv_send_pipe);
+		}else if(state->unsent_iter_i && ((struct _hv_send_pipe*)(unsent_data + state->unsent_iter_i) - 1)->queued > pipe_state->queued){ state->unsent_iter_i = (size_t)pos; }
+	}else{ state->unsent_iter_i = sizeof(struct _hv_send_pipe); }
 }
 uint32_t _hv_find_pipe_last(struct _hv_remote* state, const uint32_t pipeid[restrict 5], unsigned qos, uint32_t self, struct _hv_send_packet_placeholder* plch){
 	uint64_t hash = _hv_send_pipe_hash(pipeid);
@@ -504,7 +503,7 @@ uint32_t _hv_find_pipe_last(struct _hv_remote* state, const uint32_t pipeid[rest
 		size_t sz = array_buffer_size(&state->pipes_with_unsent);
 		if(sz > sizeof(struct _hv_send_pipe)*2 << cur_rank){
 			// rehash
-			char* data = (char*) array_buffer_data(&state->pipes_with_unsent);
+			char* data = (char*)array_buffer_data(&state->pipes_with_unsent);
 			hash_table_set_rank(&state->pipes_with_unsent_b, ++cur_rank);
 			for(unsigned i = 0; i < sz; i += sizeof(struct _hv_send_pipe)){
 				struct _hv_send_pipe* ps = (struct _hv_send_pipe*)(data+i);
@@ -585,7 +584,6 @@ static inline void _hv_link_unsent_ack(struct _hv_remote* state){
 #define CHACHA20_INIT {0x61707865, 0x3320646e, 0x79622d32, 0x6b206574} // "expand 32-byte k"
 
 static inline void _hv_finish(hivemind_server_t* s){
-
 	clear_pipes:
 	exclusive_lock_acquire(&s->pipes_lock);
 	size_t pipe_top = atomic_load_explicit(&s->pipes_heap_i, memory_order_relaxed);
@@ -610,13 +608,13 @@ static inline void _hv_finish(hivemind_server_t* s){
 			if(s->finish_cb) s->finish_cb(s->udata, p->udata);
 		}
 		assert(pipec == pipe_top);
-		free(pipe_block);
+		_hv_free(pipe_block, (sizeof(atomic(uintptr_t)) + sizeof(struct _hv_pipe)*2) * ((1ull<<pipes_bucket_exp)&-2ull));
 		goto clear_pipes; // there may be more pipes if any callbacks created some
 	}
 
 	size_t buckets = (1<<s->buckets_exp)>>1;
 	struct _hv_remote** r = s->remote_buckets;
-	if(buckets < 2) r = (struct _hv_remote**) &s->remote_buckets;
+	if(buckets < 2) r = (struct _hv_remote**)&s->remote_buckets;
 	for(size_t i = 0; i < buckets; i++){
 		struct _hv_remote* state = r[i];
 		while(state){
@@ -625,12 +623,12 @@ static inline void _hv_finish(hivemind_server_t* s){
 				vqueue_close(&state_vq->q);
 				assert(!state_vq->ref);
 				struct _hv_remote* n = state->next;
-				free(state);
+				_hv_free(state, sizeof(struct _hv_remote_vq));
 				state = n;
 				continue;
 			}
-			uint64_t rl = _hv_time_lock_acq(&state->recv_last_used);
-			uint64_t sl = _hv_time_lock_acq(&state->send_last_used);
+			_hv_time_lock_acq(&state->recv_last_used);
+			_hv_time_lock_acq(&state->send_last_used);
 			assert(!state->recv_unlocked_ref && !state->send_unlocked_ref);
 			state->ack_coal_i = 0;
 			bool bypass = state->bypass_type == 1;
@@ -641,7 +639,7 @@ static inline void _hv_finish(hivemind_server_t* s){
 			state->prevp = 0;
 			struct _hv_remote* n = state->next;
 			if(!atomic_load_explicit(&state->undrained_next, memory_order_relaxed) && !atomic_load_explicit(&state->unsent_ack_next, memory_order_relaxed)){
-				free(state);
+				_hv_free(state, _HV_REMOTE_SIZE);
 			}else{
 				_hv_time_lock_rel(&state->send_last_used, 1);
 				_hv_time_lock_rel(&state->recv_last_used, 1);
@@ -649,7 +647,7 @@ static inline void _hv_finish(hivemind_server_t* s){
 			state = n;
 		}
 	}
-	if(s->buckets_exp >= 2) free(s->remote_buckets);
+	if(s->buckets_exp >= 2) _hv_free(s->remote_buckets, sizeof(struct _hv_remote*) * buckets);
 	s->remote_buckets = 0; s->remote_count = 0;
 	s->buckets_exp = 0;
 }

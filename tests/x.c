@@ -27,7 +27,7 @@ static inline uint64_t rnd(void){
 	uint64_t x = rng_state;
 	x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
 	rng_state = x;
-	return x * 0x2545F4914F6CDD1Dull;
+	return x * 0x2545f4914f6cdd1dull;
 }
 static inline size_t rnd_n(size_t n){ return n ? (size_t)(rnd() % n) : 0; }
 static void rnd_bytes(void* p, size_t n){
@@ -64,7 +64,7 @@ static void test_files(void){
 	CHECK(x_write(f, buf, 0, 100) == 100, "write");
 	CHECK(x_write(f, buf+100, 1000, 50) == 50, "write past end");
 	CHECK(x_getsize(f) == 1050, "size after sparse write %llu", (unsigned long long)x_getsize(f));
-	memset(out, 0xAA, sizeof(out));
+	memset(out, 0xaa, sizeof(out));
 	CHECK(x_read(f, out, 0, 100) == 100 && !memcmp(out, buf, 100), "read back");
 	CHECK(x_read(f, out, 100, 10) == 10, "read hole");
 	CHECK(!memcmp(out, (uint8_t[10]){0}, 10), "hole not zero");
@@ -179,13 +179,13 @@ static void test_pages(void){
 	size_t nz = 0;
 	for(size_t i = 0; i < 3*X_PAGE_SIZE; i++) nz += p[i] != 0;
 	CHECK(!nz, "pagealloc not zeroed (%zu nonzero bytes)", nz);
-	memset(p, 0x5A, 3*X_PAGE_SIZE);
+	memset(p, 0x5a, 3*X_PAGE_SIZE);
 	x_touch_pages(p, 3);
 	x_invalidate_pages(p+X_PAGE_SIZE, 1);
 	// Each byte of an invalidated region is either the last written value or zero
 	size_t bad = 0;
 	for(size_t i = 0; i < 3*X_PAGE_SIZE; i++)
-		bad += (i >= X_PAGE_SIZE && i < 2*X_PAGE_SIZE) ? (p[i] != 0x5A && p[i] != 0) : p[i] != 0x5A;
+		bad += (i >= X_PAGE_SIZE && i < 2*X_PAGE_SIZE) ? (p[i] != 0x5a && p[i] != 0) : p[i] != 0x5a;
 	CHECK(!bad, "%zu bytes corrupted by invalidate", bad);
 	x_pagefree(p, 3);
 
@@ -241,16 +241,16 @@ static void test_random(void){
 	CHECK(chi < 370, "chi-squared %.1f", chi);
 	// Odd lengths / unaligned destinations leave neighbours untouched
 	for(size_t len = 1; len < 70; len++){
-		memset(a, 0xEE, 80);
+		memset(a, 0xee, 80);
 		x_randombytes(a+3, len);
-		CHECK(a[2] == 0xEE && a[3+len] == 0xEE, "randombytes(%zu) overran", len);
+		CHECK(a[2] == 0xee && a[3+len] == 0xee, "randombytes(%zu) overran", len);
 	}
 
-	memset(a, 0xFF, sizeof(a));
+	memset(a, 0xff, sizeof(a));
 	x_zerobytes(a+1, 100);
-	CHECK(a[0] == 0xFF && a[101] == 0xFF && !memcmp(a+1, (uint8_t[100]){0}, 100), "zerobytes");
+	CHECK(a[0] == 0xff && a[101] == 0xff && !memcmp(a+1, (uint8_t[100]){0}, 100), "zerobytes");
 	x_zerobytes(a, 0);
-	CHECK(a[0] == 0xFF, "zero-length zerobytes wrote");
+	CHECK(a[0] == 0xff, "zero-length zerobytes wrote");
 }
 
 /* ==================== IP addresses ==================== */
@@ -356,14 +356,14 @@ static void test_interfaces(void){
 	interface_to_str(0, name);
 	CHECK(name[0] == 0, "interface_to_str(0) = \"%.*s\"", (int)INTERFACE_STR_MAX_LEN, name);
 	memset(name, 'X', INTERFACE_STR_MAX_LEN);
-	interface_to_str(0x7FFFFFFF, name);
+	interface_to_str(0x7fffffff, name);
 	CHECK(name[0] == 0, "interface_to_str(bogus) = \"%.*s\"", (int)INTERFACE_STR_MAX_LEN, name);
 	interface_to_str(lo, name);
 	CHECK(!strcmp(name, "lo") || !strcmp(name, "lo0"), "loopback name \"%s\"", name);
 
 	// interface_mtu: invalid indices give 0
 	CHECK(interface_mtu(0) == 0, "interface_mtu(0) = %zu", interface_mtu(0));
-	CHECK(interface_mtu(0x7FFFFFFF) == 0, "interface_mtu(bogus) = %zu", interface_mtu(0x7FFFFFFF));
+	CHECK(interface_mtu(0x7fffffff) == 0, "interface_mtu(bogus) = %zu", interface_mtu(0x7fffffff));
 
 	// Every interface the OS lists: name <-> index round trip, MTU agrees with the OS
 	struct ifaddrs* ifap;
@@ -403,7 +403,7 @@ static void test_interfaces(void){
 
 	// interface_mtu must not leak its temporary socket, on success or failure
 	int fds = count_open_fds();
-	for(int i = 0; i < 200; i++){ interface_mtu(lo); interface_mtu(0x7FFFFFFF); }
+	for(int i = 0; i < 200; i++){ interface_mtu(lo); interface_mtu(0x7fffffff); }
 	int leaked = count_open_fds() - fds;
 	CHECK(leaked == 0, "interface_mtu leaked %d file descriptors over 400 calls", leaked);
 
@@ -489,9 +489,9 @@ static void test_udp(void){
 	r = read_wait(srv, 0, out, sizeof(out), 1000000);
 	CHECK(r == 0, "empty datagram r=%d", r);
 	CHECK(x_udp_send(cli, to, buf, 100), "send 100");
-	memset(out, 0xEE, 100);
+	memset(out, 0xee, 100);
 	r = read_wait(srv, 0, out, 10, 1000000);
-	CHECK(r == 10 && !memcmp(out, buf, 10) && out[10] == 0xEE, "truncated read r=%d", r);
+	CHECK(r == 10 && !memcmp(out, buf, 10) && out[10] == 0xee, "truncated read r=%d", r);
 	CHECK(x_udp_next_read(srv, 0, out, sizeof(out)) == -1, "truncated remainder was not discarded");
 
 	// Oversized datagram fails

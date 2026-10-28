@@ -322,7 +322,7 @@ class HivemindServerJS : public Napi::ObjectWrap<HivemindServerJS>{
 		}else if(info[1].IsDataView()){
 			auto v = info[1].As<Napi::ArrayBuffer>();
 			data = v.Data(); sz = v.ByteLength();
-		}else goto type_err;
+		}else{ goto type_err; }
 		hivemind_pipe_t to, *to_ptr = (hivemind_pipe_t*) tov.Data();
 		if((uintptr_t)to_ptr & 3){
 			// Unaligned, copy to stack

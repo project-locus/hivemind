@@ -7,7 +7,7 @@ static void check_send(struct _hv_remote* state){
 	size_t sz = ring_buffer_size(&state->send_queue);
 	if(!sz)
 		assert(state->send_order_end == &state->send_order_start);
-	uint32_t lo = state->send_seq_lo-sz/sizeof(struct _hv_send_packet*);
+	uint32_t lo = state->send_seq_lo - sz/sizeof(struct _hv_send_packet*);
 	for(size_t j = 0; j < sz; j += sizeof(struct _hv_send_packet*)){
 		struct _hv_send_packet* v2;
 		ring_buffer_get(&state->send_queue, j, &v2, sizeof(struct _hv_send_packet*), true);

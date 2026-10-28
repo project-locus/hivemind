@@ -16,8 +16,7 @@ static_assert(CHAR_BIT == 8);
 
 #define _hv_internal_clock() mono_now()
 
-#define memcmp16(a, b) (((uint64_t)(a)[0]|(uint64_t)(a)[1]<<32) ^ ((uint64_t)(b)[0]|(uint64_t)(b)[1]<<32)) | \
-	(((uint64_t)(a)[2]|(uint64_t)(a)[3]<<32) ^ ((uint64_t)(b)[2]|(uint64_t)(b)[3]<<32))
+#define memcmp16(a, b) (((uint64_t)(a)[0] | (uint64_t)(a)[1]<<32) ^ ((uint64_t)(b)[0] | (uint64_t)(b)[1]<<32)) | (((uint64_t)(a)[2] | (uint64_t)(a)[3]<<32) ^ ((uint64_t)(b)[2] | (uint64_t)(b)[3]<<32))
 
 static inline void* _hv_alloc(size_t bytes){
 	void* addr = malloc(bytes);
@@ -50,7 +49,7 @@ static inline uint64_t _hv_mix64(uint64_t x){
 }
 
 static inline uint64_t _hv_mix64_addr(ip_addr_t addr, uint16_t port){
-	return _hv_mix64(((uint64_t)addr.dwords[0]<<32|addr.dwords[1]) ^ _hv_mix64((uint64_t)addr.dwords[2]<<32|addr.dwords[3]) ^ (port * 0x9e3779b97f4a7c15ull));
+	return _hv_mix64(((uint64_t)addr.dwords[0]<<32 | addr.dwords[1]) ^ _hv_mix64((uint64_t)addr.dwords[2]<<32 | addr.dwords[3]) ^ (port * 0x9e3779b97f4a7c15ull));
 }
 
 struct _hv_send_packet{
@@ -59,7 +58,7 @@ struct _hv_send_packet{
 	uint32_t payload4[];
 };
 
-#define _hv_packet_allocsz(p) (sizeof(struct _hv_send_packet) + ((p)->len4<<2) + ((p)->has_err_fb?20+sizeof(uintptr_t):0))
+#define _hv_packet_allocsz(p) (sizeof(struct _hv_send_packet) + ((p)->len4<<2) + ((p)->has_err_fb ? 20+sizeof(uintptr_t) : 0))
 
 struct _hv_send_packet_placeholder{
 	struct _hv_send_packet* next; // can be tagged
@@ -67,7 +66,7 @@ struct _hv_send_packet_placeholder{
 };
 
 static inline uint32_t _hv_lseqof(struct _hv_send_packet* p, bool bypass){
-	return p->kex ? 0 : le32toh(*(uint32_t*)(p->payload4+(bypass?2:4)));
+	return p->kex ? 0 : le32toh(*(uint32_t*)(p->payload4+(bypass ? 2 : 4)));
 }
 
 #ifdef __SIZEOF_INT128__
@@ -78,10 +77,10 @@ typedef unsigned __int128 uint128_t;
 struct _hv_remote_vq{
 	// Identical to start of struct _hv_remote
 	uintptr_t next_;
-	
+
 	ip_addr_t addr; uint16_t port, server_mtu:14, bypass_type:2;
 	atomic(uint32_t) ref;
-	
+
 	atomic(uint64_t) vq_last_used;
 	struct _hv_remote** prevp;
 	vqueue_t q;
@@ -97,7 +96,7 @@ struct _hv_send_pipe{
 
 struct _hv_remote{
 	// Field order is specific and to avoid an entire cache line of wasted padding and reduce false sharing
-	// This layout is optimized for 64 bit pointers and size_t.
+	// This layout is optimized for 64 bit pointers and size_t
 
 	// == 1st cache line: infrequently written. This line needs to be quick to access across many threads since it's what's used to traverse the linked list ==
 
@@ -112,7 +111,7 @@ struct _hv_remote{
 	// Back pointer for the bucket linked list
 	struct _hv_remote** prevp;
 	// 16B left
-	
+
 	// == 2-4th cache line: frequently written by send/drain logic ==
 	// Timestamp when last packet was sent. Also used as a lock and init flag (1 = uninit, 0 = locked)
 	// See _hv_time_lock_acq/_hv_time_lock_rel
@@ -124,17 +123,17 @@ struct _hv_remote{
 	atomic(struct _hv_remote*) undrained_next;
 	// send_key is moved to the first cache line to save 1 cache line on the struct size
 	// It's infrequently written so this should be fine performance-wise
-	
+
 	// (Potentially hole-y) Ring buffer of send packets, one slot per sequence number. Slot 0 is sequence `send_seq_lo - size`, so any index derived from the size must be recomputed after the lock is released and reacquired (acks shift acked slots off the front)
 	// `0` => Reserved, not in send_order (being built by hivemind_send, or currently being (re)sent with the lock released). Acks for these are ignored
 	// `1` => Already acked (a hole; leading holes are shifted off the front)
 	// `packet|2` => Queued in a pipe but not sent yet
-	// otherwise => In the send_order linked list. The element is a pointer to &prev->next (or &send_order_start). This allows us to remove the packet from the linked list easily without making it a doubly linked list.
+	// otherwise => In the send_order linked list. The element is a pointer to &prev->next (or &send_order_start). This allows us to remove the packet from the linked list easily without making it a doubly linked list
 	ring_buffer_t send_queue;
 	// Rolling window for tracking how many packets can be sent how fast in us
 	uint64_t send_window;
 	// ---
-	// Linked list of all sent packets, in the order that they were last sent (and therefore the same order that they should be resent if needed).
+	// Linked list of all sent packets, in the order that they were last sent (and therefore the same order that they should be resent if needed)
 	// `send_order_end` is not a pointer to the last packet but to the last packet's next field (or a pointer to `send_order_start` if the list is empty). `*send_order_end` should always be `NULL`
 	struct _hv_send_packet *send_order_start, **send_order_end;
 
@@ -142,15 +141,15 @@ struct _hv_remote{
 	hash_table_t pipes_with_unsent_b;
 	array_buffer_t pipes_with_unsent;
 	// 8B left
-	
+
 
 	// ---
 	union{ uint32_t send_key[8]; uint64_t send_crcinit; }; // Derived local key for outgoing
-	
+
 	// Packed tightly for memory efficiency
 	// `min_latency_when` -> When `min_latency` was achieved
 	// `last_ack` -> When the last ack was received
-	// rtt_gate = rtt_gate_lo|rtt_gate_hi<<16 -> Sequence number of when to start measuring latency deltas. We don't want to do this during the first RTT since that's when we're finding the min/average latency.
+	// rtt_gate = rtt_gate_lo|rtt_gate_hi<<16 -> Sequence number of when to start measuring latency deltas. We don't want to do this during the first RTT since that's when we're finding the min/average latency
 	// `rtt_gate == 0` -> No packets acked yet. When the first packet is acked, rtt_gate is set to the next unsent packet if any
 	// `rtt_gate == seq<<1|1` -> Wait until this seq to start measuring latency deltas
 	// `rtt_gate == 2` -> We are measuring latency deltas
@@ -186,7 +185,7 @@ struct _hv_remote{
 	// ack_coal_i = current index in ack_coal_buf
 	// ack_coal_tim0 = _hv_internal_clock() time for first ack, used to encode `dt`s in ack_coal_buf
 	uint64_t ack_coal_tim0:56, ack_coal_i:8;
-	// Buffer of coalesced acks. Up to 16 acks can be coalesced together (the 16th is stored in `_hv_queue_ack`'s stack when the buffer is found to be full). When the buffer is not full, the last element in this buffer is the low 32 bits of the ack's base sequence. All other values are packed `diff`s + `dt`s.
+	// Buffer of coalesced acks. Up to 16 acks can be coalesced together (the 16th is stored in `_hv_queue_ack`'s stack when the buffer is found to be full). When the buffer is not full, the last element in this buffer is the low 32 bits of the ack's base sequence. All other values are packed `diff`s + `dt`s
 	size_t qd_bytes4;
 
 	alignas(16) char unused_[16];
@@ -213,7 +212,7 @@ static inline size_t _hv_send_slot_b(struct _hv_send_packet* p, bool bypass, uin
 #define _hv_send_slot4(state, p, bypass, base) _hv_send_slot_b(p, bypass, base)
 
 static inline uint64_t _hv_send_pipe_hash(const uint32_t id[5]){
-	return _hv_mix64((uint64_t)id[1]<<32|id[4])^_hv_mix64((uint64_t)id[2]<<32|id[3]);
+	return _hv_mix64((uint64_t)id[1]<<32 | id[4])^_hv_mix64((uint64_t)id[2]<<32 | id[3]);
 }
 
 // Remove the pipe at offset `off` (offset of the end of the element, as stored in the hash table) from its hash chain
@@ -309,21 +308,21 @@ static_assert(sizeof(hivemind_server_t) == 256);
 	#pragma clang diagnostic ignored "-Watomic-alignment"
 	static void _hv_alloc_id(hivemind_server_t* s, uint32_t out[5], uint64_t t){
 		uint128_t v = atomic_fetch_add_explicit(&s->_id, 1, memory_order_relaxed);
-		out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff|v>>96<<24);
+		out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff | v>>96<<24);
 		out[2] = htole32(v>>64); out[3] = htole32(v>>32);
 		out[4] = htole32(v);
 	}
 	static void _hv_nalloc_id(hivemind_server_t* s, uint32_t out[5]){
 		uint64_t t = epoch_now()/MILLISECOND_US;
 		uint128_t v = atomic_load_explicit(&s->_id, memory_order_relaxed);
-		out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff|v>>96<<24);
+		out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff | v>>96<<24);
 		out[2] = htole32(v>>64); out[3] = htole32(v>>32);
 		out[4] = htole32(v);
 	}
 	static inline uint64_t _hv_alloc_id_short(hivemind_server_t* s){
 		uint64_t t = epoch_now()/MILLISECOND_US;
 		uint64_t lo = (uint64_t)atomic_fetch_add_explicit(&s->_id, 1, memory_order_relaxed);
-		return t<<8|(lo&0xff);
+		return t<<8 | (lo&0xff);
 	}
 	#pragma clang diagnostic pop
 #else
@@ -333,7 +332,7 @@ static_assert(sizeof(hivemind_server_t) == 256);
 		while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
 		uint64_t lo = s->_id_lo++, hi = s->_id_hi; if(lo == -1ull) s->_id_hi = hi+1;
 		atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
-		out[0] = htole32(t); out[1] = htole32(t<<8>>40|hi>>32<<24);
+		out[0] = htole32(t); out[1] = htole32(t<<8>>40 | hi>>32<<24);
 		out[2] = htole32(hi); out[3] = htole32(lo>>32);
 		out[4] = htole32(lo);
 	}
@@ -343,7 +342,7 @@ static_assert(sizeof(hivemind_server_t) == 256);
 		while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
 		uint64_t lo = s->_id_lo, hi = s->_id_hi;
 		atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
-		out[0] = htole32(t); out[1] = htole32(t<<8>>40|hi>>32<<24);
+		out[0] = htole32(t); out[1] = htole32(t<<8>>40 | hi>>32<<24);
 		out[2] = htole32(hi); out[3] = htole32(lo>>32);
 		out[4] = htole32(lo);
 	}
@@ -353,7 +352,7 @@ static_assert(sizeof(hivemind_server_t) == 256);
 		while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
 		uint64_t lo = s->_id_lo++; if(lo == -1ull) s->_id_hi++;
 		atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
-		return t<<8|(lo&0xff);
+		return t<<8 | (lo&0xff);
 	}
 #endif
 
@@ -423,7 +422,7 @@ static inline void _hv_remote_cleanup_recv(struct _hv_remote* state, bool bypass
 	while(ring_iterator_next(&it, &ptr, sizeof(ptr), true)){
 		if(ptr <= 3) continue;
 		if(!(ptr&3)) _hv_free((void*)ptr, sizeof(struct _hv_packet_reassembly) + ((struct _hv_packet_reassembly*)ptr)->total);
-		else if((ptr&3)==2) free((uint8_t*)(ptr - 2 - (bypass ? 12 : 20)));
+		else if((ptr&3) == 2) _hv_free((uint8_t*)(ptr - 2 - (bypass ? 12 : 20)), *(uint16_t*)(ptr - 2 - 8));
 	}
 	ring_buffer_destroy(&state->recv_queue);
 	state->recv_queue = (ring_buffer_t){};
