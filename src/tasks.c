@@ -89,8 +89,11 @@ static void _hv_remove_unused(hivemind_server_t* s, uint64_t t){
 			else next->prevp = prevp;
 		}
 		_hv_free(state, state->bypass_type&2 ? sizeof(struct _hv_remote_vq) : _HV_REMOTE_SIZE);
+		s->remote_count--;
 	}
 	array_buffer_destroy(&candidates);
+	// TODO: shrink states hash table
+	
 	exclusive_lock_release(&s->state_lock);
 }
 

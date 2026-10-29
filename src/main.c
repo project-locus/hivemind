@@ -123,7 +123,7 @@ void* hivemind_close_pipe(hivemind_server_t* s, const hivemind_pipe_t* pipe){
 	return _hv_kill_pipe(s, pipe->id);
 }
 
-void hivemind_send(hivemind_server_t* s, const hivemind_pipe_t* to, const uint8_t* msg, size_t len, const hivemind_pipe_t* f_return_pipe, uintptr_t errudata){
+void hivemind_send(hivemind_server_t* s, const hivemind_pipe_t* to, const uint8_t* msg, size_t len, const hivemind_pipe_t* f_return_pipe, void* errudata){
 #ifndef HIVEMIND_NO_LOCAL_BYPASS
 	if(!memcmp(s->dwords, to->dwords, 18 /* Everything except MTU */)){
 		// Zero-copy loopback shortcut
@@ -329,9 +329,9 @@ void hivemind_send(hivemind_server_t* s, const hivemind_pipe_t* to, const uint8_
 	if(f_return_pipe){
 		packet->has_err_fb = 1;
 		memcpy(packet->payload4+true_plen, f_return_pipe->id, 20);
-		packet->payload4[true_plen+5] = errudata;
+		packet->payload4[true_plen+5] = (uint32_t)(uintptr_t)errudata;
 #if UINTPTR_MAX > UINT32_MAX
-		packet->payload4[true_plen+6] = errudata>>32;
+		packet->payload4[true_plen+6] = (uint32_t)((uintptr_t)errudata >> 32);
 #endif
 	}
 	assert((size_t)(ppackets - packets) == num_packets);
@@ -388,7 +388,7 @@ size_t hivemind_pipe_to_string(const hivemind_pipe_t* pipe, char out[HIVEMIND_PI
 	out[i] = 0;
 	return i;
 }
-bool hivemind_pipe_from_string(hivemind_pipe_t* pipe, const char in[HIVEMIND_PIPE_STR_MAX_LEN]){
+bool hivemind_pipe_from_string(const char in[HIVEMIND_PIPE_STR_MAX_LEN], hivemind_pipe_t* pipe){
 	size_t len = strnlen(in, HIVEMIND_PIPE_STR_MAX_LEN);
 	if(len >= HIVEMIND_PIPE_STR_MAX_LEN) return false;
 	char str[HIVEMIND_PIPE_STR_MAX_LEN];

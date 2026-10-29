@@ -142,7 +142,6 @@ struct _hv_remote{
 	array_buffer_t pipes_with_unsent;
 	// 8B left
 
-
 	// ---
 	union{ uint32_t send_key[8]; uint64_t send_crcinit; }; // Derived local key for outgoing
 
@@ -175,6 +174,7 @@ struct _hv_remote{
 	// Linked list of all remotes with unsent acks
 	atomic(struct _hv_remote*) unsent_ack_next;
 	// ---
+	// Buffer of coalesced acks. Up to 16 acks can be coalesced together (the 16th is stored in `_hv_queue_ack`'s stack when the buffer is found to be full). When the buffer is not full, the last element in this buffer is the low 32 bits of the ack's base sequence. All other values are packed `diff`s + `dt`s
 	uint32_t ack_coal_buf[15];
 	// 4B left
 
@@ -185,7 +185,7 @@ struct _hv_remote{
 	// ack_coal_i = current index in ack_coal_buf
 	// ack_coal_tim0 = _hv_internal_clock() time for first ack, used to encode `dt`s in ack_coal_buf
 	uint64_t ack_coal_tim0:56, ack_coal_i:8;
-	// Buffer of coalesced acks. Up to 16 acks can be coalesced together (the 16th is stored in `_hv_queue_ack`'s stack when the buffer is found to be full). When the buffer is not full, the last element in this buffer is the low 32 bits of the ack's base sequence. All other values are packed `diff`s + `dt`s
+
 	size_t qd_bytes4;
 
 	alignas(16) char unused_[16];
@@ -271,10 +271,11 @@ struct hivemind_server{
 	uint64_t message_timeout;
 	size_t backpressure_limit;
 	hivemind_on_pipe_msg_fn_t on_msg;
+	hivemind_on_pipe_close_fn_t on_err;
 	hivemind_generic_fn_t open_close_cb;
 	hivemind_pipe_finish_fn_t finish_cb;
-	uint32_t master_key[8];
-
+	uint32_t master_key[16];
+	uint32_t master_key_old[8];
 #ifdef __SIZEOF_INT128__
 	union{
 		atomic(uint128_t) _id;
@@ -287,6 +288,7 @@ struct hivemind_server{
 	};
 	atomic_flag _id_lock;
 #endif
+	struct _hv_vq* vq_block;
 	uint8_t buckets_exp, pipes_bucket_exp;
 	atomic(uint8_t) vq_flag;
 	shared_lock_t state_lock, pipes_lock;
@@ -297,11 +299,10 @@ struct hivemind_server{
 	atomic(hivemind_server_t*) next, *prevp;
 	x_socket_t handle;
 	uint32_t first_id[5];
-	struct _hv_vq* vq_block;
-	alignas(256) char end_[];
+	alignas(64) char end_[];
 };
 
-static_assert(sizeof(hivemind_server_t) == 256);
+static_assert(sizeof(hivemind_server_t) <= 320);
 
 #ifdef __SIZEOF_INT128__
 	#pragma clang diagnostic push

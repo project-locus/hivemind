@@ -98,7 +98,7 @@ class HivemindServerJS : public Napi::ObjectWrap<HivemindServerJS>{
 			return info.Env().Undefined();
 		}
 		auto pipev = Napi::ArrayBuffer::New(info.Env(), sizeof(hivemind_pipe_t));
-		if(!hivemind_pipe_from_string((hivemind_pipe_t*) pipev.Data(), info[0].As<Napi::String>().Utf8Value().c_str())) return info.Env().Null();
+		if(!hivemind_pipe_from_string(info[0].As<Napi::String>().Utf8Value().c_str(), (hivemind_pipe_t*) pipev.Data())) return info.Env().Null();
 		return pipev;
 	}
 

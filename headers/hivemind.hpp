@@ -50,7 +50,7 @@ struct Pipe: hivemind_pipe_t{
 	// Parse a string representation of a pipe, which currently looks like `[IP]/[port]/[mtu]/[time]/[rand_b64][QOS]`. If the string does not represents a valid pipe, the returned pipe will be zero-initialized, and `is_valid()` will return false (all-zero is never a valid pipe).
 	static Pipe from_string(const std::string& in){
 		Pipe p;
-		if(!hivemind_pipe_from_string(&p, in.c_str()))
+		if(!hivemind_pipe_from_string(in.c_str(), &p))
 			memset(&p, 0, sizeof(p));
 		return p;
 	}
