@@ -8,26 +8,18 @@ static void _hv_send_probe_ack_err(hivemind_server_t* s, uint32_t opts, const re
 	start[10] = start[4];
 	memcpy(start, s->first_id, 20);
 	start[9] = start[0];
-	_hv_keyless_packet_finish(s, to, packet2, 40, opts);
+	_hv_standalone_packet_finish(s, to, packet2, 40, opts);
 }
-static void _hv_send_probe_ack_err_enc_bypass(hivemind_server_t* s, uint32_t opts, const remote_t* to){
+static void _hv_send_probe_ack_err_bypass(hivemind_server_t* s, uint32_t opts, const remote_t* to){
 	uint8_t packet2[61];
 	memcpy(packet2+20, s->first_id, 20);
 	_hv_nalloc_id(s, (uint32_t*)(packet2+40));
-	_hv_crcinitless_packet_finish(s, to, packet2, 40, opts);
+	_hv_standalone_bypass_packet_finish(s, to, packet2, 40, opts);
 }
 
 #define _hv_is_worth_move(plen, buflen) ((plen) >= ((buflen)>>1)+((buflen)>>3))
 
 // Contents of recv_queue:
-// OLD
-// size=0 ptr=0 -> None
-// size=0 ptr=X -> Reassembly head
-// size=N ptr=X -> Saved packet
-// size=65535 ptr=0 -> Already received
-// size=65535 ptr=N -> Already received dependent packet (fully reassembled, waiting)
-// size=65534 ptr=N -> Dependent packet idx
-
 // NEW
 // (seq<<1|1) > 2 -> Dependent packet idx
 // ptr (algn 4) -> reassembly head
@@ -65,17 +57,7 @@ static inline void _hv_recv_slot_done(struct _hv_remote* state, size_t idx){
 	ring_buffer_shift_discard(&state->recv_queue, idx < sz ? idx : sz, false);
 }
 
-// ack_err / ack_err_ack
-// A message whose pipe can't be acquired is answered with an ack_err in place of the ack for its last packet. The slot of that packet stays 2 (pinning recv_seq_lo) and the error stays in ack_err_q, resent until the sender confirms it with an ack_err_ack
-// They live in the same space as keyless packets (marker word with low byte 0, where an ack would have a nonzero delta), but are signed with the session key
-// encrypted (24B): [0,16) poly1305 tag over [20,24), [16,20) seq low32, [20,24) opts<<8
-// bypass (16B + flag byte): [0,8) crc64 over [hi, lo>>32] ++ [8,16), [8,12) seq low32, [12,16) opts<<8
-// ack_err: opts = 0x800001 | reason<<8, chacha_in[12] = -3, signed with the receiving side's key
-// ack_err_ack: opts = 0x800002, chacha_in[12] = -4, signed with the sending side's key (the same key, seen from the other end)
-#define _HV_ACK_ERR 0x800001
-#define _HV_ACK_ERR_ACK 0x800002
-
-// Fill an ack_err/ack_err_ack for the full sequence number [hi,lo], signed with this side's send key (use_send_key) or recv key
+// Fill an ack_err/ack_err_ack for the full sequence number [hi,lo], signed with the original sender's key
 static void _hv_ack_ext_sign(struct _hv_remote* state, uint32_t packet[6], uint64_t lo, uint32_t hi, bool is_reack, bool bypass){
 	if(bypass){
 		packet[0] = htole32(hi); packet[1] = htole32(lo>>32);
@@ -101,8 +83,7 @@ static void _hv_send_ack_ext(struct _hv_remote* state, uint64_t lo, uint32_t hi,
 	uint32_t packet[6];
 	_hv_ack_ext_sign(state, packet, lo, hi, is_reack, bypass);
 
-	bool send_success = x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet, bypass ? 17 : 24);
-	soft_assert(send_success);
+	soft_assert(x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet, bypass ? 17 : 24));
 }
 
 // Check a received ack_err (verified with our send key) or ack_err_ack (verified with our recv key)
@@ -168,10 +149,7 @@ static void _hv_ack_err_recvd(hivemind_server_t* s, struct _hv_remote* state, co
 	l = _hv_internal_clock();
 	send:
 	_hv_time_lock_rel(&state->send_last_used, l);
-	if(pa){
-		struct _hv_tls_packet_detach d = {.packet_on_heap = SIZE_MAX};
-		_hv_fire_pipe_end(s, pa, (uint8_t*)udata, (SIZE_MAX-63) | HIVEMIND_CLOSED_PIPE_INVALID, &d);
-	}
+	if(pa) _hv_fire_pipe_err_end(s, pa, (void*)udata, HIVEMIND_CLOSED_PIPE_INVALID);
 }
 
 static inline uint8_t* _hv_push_packet(hivemind_server_t* s, struct _hv_remote* state, unsigned plen, uint64_t lo, uint32_t hi, uint8_t* p0, unsigned header, unsigned buflen, uint64_t tim, uint64_t msglen, uint32_t pipe_last, bool bypass){
@@ -257,16 +235,29 @@ static inline uint8_t* _hv_push_packet(hivemind_server_t* s, struct _hv_remote* 
 			_hv_time_lock_rel(&state->recv_last_used, tim);
 			if(!block){
 				// directly from packet
-				bool move = _hv_is_worth_move(plen, buflen);
-				struct _hv_tls_packet_detach d = {.packet_on_heap = move ? ~header : plen};
-				if(pipe) _hv_fire_pipe_end(s, pipe, p, plen, &d);
-				if(move && d.packet_on_heap == SIZE_MAX){
-					p0 = _hv_alloc(buflen);
+				if(pipe){
+					bool move = _hv_is_worth_move(plen, buflen);
+					struct _hv_tls_packet_detach d = {.packet_on_heap = plen};
+					if(move){
+						struct _hv_alloc_offsets* hdr = (struct _hv_alloc_offsets*)(p - sizeof(struct _hv_alloc_offsets));
+						hdr->off = header; hdr->sz = plen; hdr->sz_hi = 0;
+						d.packet_on_heap = SIZE_MAX-1;
+					}
+					_hv_fire_pipe_end(s, pipe, p, plen, &d);
+					if(move && d.packet_on_heap == SIZE_MAX){
+						p0 = _hv_alloc(buflen);
+					}
 				}
 			}else{
 				// from reassembly completion
-				struct _hv_tls_packet_detach d = {.packet_on_heap = ~sizeof(struct _hv_packet_reassembly)};
-				if(pipe) _hv_fire_pipe_end(s, pipe, block->data, block->total, &d);
+				struct _hv_tls_packet_detach d = {.packet_on_heap = SIZE_MAX-1};
+				if(pipe){
+					struct _hv_alloc_offsets* hdr = (struct _hv_alloc_offsets*)(block->data - sizeof(struct _hv_alloc_offsets));
+					hdr->off = sizeof(struct _hv_packet_reassembly);
+					size_t sz = block->total + sizeof(struct _hv_packet_reassembly);
+					hdr->sz = (uint16_t)sz; hdr->sz_hi = (uint32_t)(sz>>16);
+					_hv_fire_pipe_end(s, pipe, block->data, block->total, &d);
+				}
 				if(d.packet_on_heap != SIZE_MAX) _hv_free(block, sizeof(struct _hv_packet_reassembly) + block->total);
 			}
 			_hv_time_lock_acq(&state->recv_last_used);
@@ -292,8 +283,14 @@ static inline uint8_t* _hv_push_packet(hivemind_server_t* s, struct _hv_remote* 
 					_hv_send_ack_ext(state, lo, hi, false, bypass);
 				}
 				_hv_time_lock_rel(&state->recv_last_used, tim);
-				struct _hv_tls_packet_detach d = {.packet_on_heap = ~sizeof(struct _hv_packet_reassembly)};
-				if(pipe) _hv_fire_pipe_end(s, pipe, block->data, block->total, &d);
+				struct _hv_tls_packet_detach d = {.packet_on_heap = SIZE_MAX-1};
+				if(pipe){
+					struct _hv_alloc_offsets* hdr = (struct _hv_alloc_offsets*)(block->data - sizeof(struct _hv_alloc_offsets));
+					hdr->off = sizeof(struct _hv_packet_reassembly);
+					size_t sz = block->total + sizeof(struct _hv_packet_reassembly);
+					hdr->sz = (uint16_t)sz; hdr->sz_hi = (uint32_t)(sz>>16);
+					_hv_fire_pipe_end(s, pipe, block->data, block->total, &d);
+				}
 				if(d.packet_on_heap != SIZE_MAX) _hv_free(block, sizeof(struct _hv_packet_reassembly) + block->total);
 				_hv_time_lock_acq(&state->recv_last_used);
 			}
@@ -447,14 +444,14 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 					}
 					continue;
 				}
-				uint64_t crcinit = (uint64_t)le32toh(*(uint32_t*)(packet+8)) | (uint64_t)le32toh(*(uint32_t*)(packet+16))<<32;
-				uint64_t t = epoch_now()/MILLISECOND_US, t1 = crcinit>>8;
+				uint64_t t1 = (uint64_t)le32toh(*(uint32_t*)(packet+8)) | (uint64_t)le32toh(*(uint32_t*)(packet+16))<<32;
+				uint64_t t = epoch_now()/MILLISECOND_US;
 				if((t > t1 ? t-t1 : t1-t) > _HV_STATE_LIFETIME/1000)
 					continue; // replay
 				uint64_t dhash = _hv_mix64_addr(s->addr, le16toh(s->port_le)), shash = _hv_mix64_addr(from.addr, from.port);
 				*(uint32_t*)packet = htole32(shash); *(uint32_t*)(packet+4) = htole32(shash>>32);
 				*(uint32_t*)(packet+8) = htole32(dhash); *(uint32_t*)(packet+16) = htole32(dhash>>32);
-				if(crc64(crcinit, packet, plen) != crc)
+				if(crc64(t1, packet, plen) != crc)
 					continue; // crc failed
 				unsigned payload_len = plen-20;
 				struct _hv_remote* state = _hv_state_find(s, from.addr, from.port, _HV_FIND_CREATE);
@@ -485,8 +482,8 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 					goto probe_ackd;
 				}else if(!payload_len){
 					shared_lock_release(&s->state_lock);
-					if(l == 1) _hv_send_probe_ack_err_enc_bypass(s, 2, &from); // probe ack err
-					else _hv_crcinitless_packet_finish(s, &from, packet, 0, 1); // probe ack
+					if(l == 1) _hv_send_probe_ack_err_bypass(s, 2, &from); // probe ack err
+					else _hv_standalone_bypass_packet_finish(s, &from, packet, 0, 1); // probe ack
 				}else{ shared_lock_release(&s->state_lock); }
 				continue;
 			}
@@ -561,12 +558,12 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 			l = _hv_time_lock_acq(&state->recv_last_used);
 			state->recv_unlocked_ref--;
 			if unlikely(flags == 2){
-				uint64_t kdw = crcinit>>8;
+				uint64_t kdw = crcinit;
 				uint32_t last[5];
 				_hv_nalloc_id(s, last);
 				if unlikely(!_hv_pipeid_in_range((uint32_t*)(payload-20), s->first_id, last)){
 					// Pipe range test failed, send probe ack err
-					_hv_send_probe_ack_err_enc_bypass(s, 3, &from);
+					_hv_send_probe_ack_err_bypass(s, 3, &from);
 					_hv_time_lock_rel(&state->recv_last_used, l);
 					continue;
 				}else if(kdw <= state->key_derived_when){
@@ -584,7 +581,6 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 				state->recv_crcinit = crcinit;
 				_hv_queue_ack(state, 0, 0, 0, true, true);
 			}
-			if(len != -1ull) header += 20;
 			packet = _hv_push_packet(s, state, plen, lo, hi, packet, header, buflen, tim, len, pipe_last, true);
 			continue;
 		}
@@ -624,8 +620,8 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 				continue;
 			}
 			unsigned payload_len = plen-40;
-			uint32_t* knonce = (uint32_t*)(packet+20);
-			uint32_t opts = le32toh(*knonce)>>8;
+			uint32_t *hdr = (uint32_t*)(packet+16), *body = hdr+6;
+			uint32_t opts = le32toh(hdr[1])>>8;
 			if(opts & 0x800000){
 				struct _hv_remote* state = _hv_state_find(s, from.addr, from.port, 0);
 				if(state){
@@ -637,10 +633,11 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 				}
 				continue;
 			}
-			knonce[0] = *(uint32_t*)(packet+16);
+			hdr[1] = hdr[0];
 			uint32_t tag[4], *ptag = (uint32_t*)packet;
 			uint32_t poly_key[8];
-			uint64_t t = epoch_now()/MILLISECOND_US, t1 = _hv_keyless_sig2(s, &from, knonce, poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2);
+			uint64_t t = epoch_now()/MILLISECOND_US;
+			uint64_t t1 = _hv_consume_signed_auth(s, &from, hdr+1, poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2);
 			if((t > t1 ? t-t1 : t1-t) > _HV_STATE_LIFETIME/1000)
 				continue; // replay
 			*(uint32_t*)(packet+36) = htole32(opts<<8);
@@ -665,12 +662,12 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 					continue;
 				}
 				// ack err
-				uint32_t pipe0[5]; pipe0[0] = *(knonce+13); memcpy(pipe0+1, knonce+5, 16);
-				*(knonce+8) = *(knonce+14);
+				uint32_t pipe0[5]; pipe0[0] = body[10]; memcpy(pipe0+1, body, 16);
+				body[5] = body[11];
 				array_buffer_t dropped = {0};
 				_hv_time_lock_acq_excl(&state->send_last_used, &state->send_unlocked_ref);
 				shared_lock_release(&s->state_lock);
-				bool re_kex = _hv_filter_send_queue(s, state, pipe0, knonce+8, opts&1, false, &dropped);
+				bool re_kex = _hv_filter_send_queue(s, state, pipe0, body+5, opts&1, false, &dropped);
 				_hv_time_lock_rel(&state->send_last_used, re_kex ? 1 : _hv_internal_clock());
 				_hv_fire_dropped(s, array_buffer_data(&dropped), array_buffer_size(&dropped), HIVEMIND_CLOSED_PIPE_INVALID);
 				array_buffer_destroy(&dropped);
@@ -689,7 +686,7 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 			}else if(!payload_len){
 				shared_lock_release(&s->state_lock);
 				if(l == 1) _hv_send_probe_ack_err(s, 2, &from); // probe ack err
-				else _hv_keyless_packet_finish(s, &from, packet, 0, 1); // probe ack
+				else _hv_standalone_packet_finish(s, &from, packet, 0, 1); // probe ack
 			}else{ shared_lock_release(&s->state_lock); }
 			continue;
 		}
@@ -746,7 +743,7 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 		d[12] = 0xffffffff; ChaCha20_block(d);
 		if unlikely(header == 64){
 			len = (uint64_t)le32toh(*(uint32_t*)(packet+plen-4) ^ d[15]) | (uint64_t)le32toh(*(uint32_t*)(packet+plen-8) ^ d[14])<<32;
-			header = 40; plen -= 8;
+			header = 56; plen -= 8;
 		}else if(header == 44){
 			uint32_t x = le32toh(*(uint32_t*)(packet+plen-4) ^ d[15]);
 			len = x>>16; pipe_last = seq-(x&0xffff);
@@ -757,7 +754,7 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 			plen -= 12; header = 40;
 		}else if(header != 20){ continue; }
 		uint8_t* payload = packet + header; plen -= header;
-		Poly1305(payload, plen2 - header, (uint8_t*)d, (uint8_t*)(d+8));
+		Poly1305(payload-(len!=-1ull ? 20 : 0), plen2 - header + (len!=-1ull ? 20 : 0), (uint8_t*)d, (uint8_t*)(d+8));
 		uint32_t *ptag = (uint32_t*)packet;
 		if(memcmp16(d+8, ptag)){
 			l = _hv_time_lock_acq(&state->recv_last_used);

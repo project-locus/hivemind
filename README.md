@@ -2,6 +2,8 @@
 
 ### East-west traffic. [Safe](#safety-against-adversarial-network-participants). [Fast](#optimized-for-low-latency-and-high-throughput). [Reliable](#reliability-via-clean-failure-modes). [No bloat](#minimalism-by-design).
 
+**<u>NOT STABLE. Wait for a release branch before relying on this library.</u>**
+
 For node bindings, jump to [Getting started (node.js)](#getting-started-nodejs)
 
 ## Building

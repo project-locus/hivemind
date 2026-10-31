@@ -6,14 +6,16 @@
 		"command": "clang",
 		"args": [
 			"-DHIVEMIND_NO_LOCAL_BYPASS", "-DNO_SOFT_ASSERT",
-			"-g", "-O0", "-mcx16", "-Wall", "-std=c11",
+			"-g", "-O0", "-Wall", "-std=c11",
 			"-Wno-unused", "-Wno-unused-command-line-argument",
 			"-fno-omit-frame-pointer", "-pthread",
-			"-fsanitize=address,undefined", "-flto",
+			"-fsanitize=address,undefined", "-march=native", "-flto",
 			"${workspaceFolder}/tests/hivemind_test.c",
 			"${workspaceFolder}/src/main.c",
 			"-o", "${workspaceFolder}/tmp/test.out",
-			"-I${workspaceFolder}/include"
+			"-I${workspaceFolder}/include",
+			"-I${workspaceFolder}/vqueue",
+			"-I${workspaceFolder}/headers"
 		],
 		"group": { "kind": "build", "isDefault": true }
 	},{
@@ -22,14 +24,16 @@
 		"command": "clang",
 		"args": [
 			"-DHIVEMIND_NO_LOCAL_BYPASS", "-DNO_SOFT_ASSERT",
-			"-g", "-O0", "-mcx16", "-Wall", "-std=c11",
+			"-g", "-O0", "-Wall", "-std=c11",
 			"-Wno-unused", "-Wno-unused-command-line-argument",
 			"-fno-omit-frame-pointer", "-pthread",
-			"-fsanitize=thread", "-flto",
+			"-fsanitize=thread", "-march=native", "-flto",
 			"${workspaceFolder}/tests/hivemind_test.c",
 			"${workspaceFolder}/src/main.c",
 			"-o", "${workspaceFolder}/tmp/test.out",
-			"-I${workspaceFolder}/include"
+			"-I${workspaceFolder}/include",
+			"-I${workspaceFolder}/vqueue",
+			"-I${workspaceFolder}/headers"
 		],
 		"group": { "kind": "build", "isDefault": true }
 	},{
@@ -38,7 +42,7 @@
 		"command": "clang",
 		"args": [
 			"-DHIVEMIND_NO_LOCAL_BYPASS", "-DNO_SOFT_ASSERT",
-			"-g", "-O3", "-mcx16", "-fno-omit-frame-pointer",
+			"-g", "-O3", "-fno-omit-frame-pointer",
 			"-Wall", "-Wextra", "-Wpedantic",
 			"-Wformat=2", "-Wnull-dereference", "-Wconversion",
 			"-Wstrict-overflow=5", "-Warray-bounds", "-Werror",
@@ -49,7 +53,9 @@
 			"${workspaceFolder}/tests/hivemind_test.c",
 			"${workspaceFolder}/src/main.c",
 			"-o", "${workspaceFolder}/tmp/test.out",
-			"-I${workspaceFolder}/include"
+			"-I${workspaceFolder}/include",
+			"-I${workspaceFolder}/vqueue",
+			"-I${workspaceFolder}/headers"
 		],
 		"group": { "kind": "build", "isDefault": true }
 	}]

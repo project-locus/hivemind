@@ -4,8 +4,7 @@
 static void _hv_send_packet(struct _hv_remote* state, struct _hv_send_packet* packet, uint64_t now, bool bypass){
 	unsigned len = packet->len4<<2;
 	if(bypass && packet->first) len -= packet->kex ? 2 : 1;
-	bool send_success = x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet->payload4, len);
-	soft_assert(send_success);
+	soft_assert(x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet->payload4, len));
 	packet->time_lo = now;
 }
 
@@ -113,19 +112,18 @@ static struct _hv_send_packet* _hv_kexify(hivemind_server_t* s, struct _hv_remot
 		f->payload4[2] = htole32(dhash); f->payload4[3] = htole32(dhash>>32);
 		_hv_nalloc_id(s, state->send_key+3);
 		state->send_key[2] = 0;
-		state->send_crcinit = _hv_alloc_id_short(s);
+		state->send_crcinit = epoch_now()/MILLISECOND_US;
 	}else{ _hv_ram_packed_kex(s, state, f->payload4+4); }
 	return f;
 }
 
-static inline void _hv_fire_dropped(hivemind_server_t* s, uint32_t* dropped, size_t count, unsigned reason){
+static inline void _hv_fire_dropped(hivemind_server_t* s, uint32_t* dropped, size_t count, hivemind_pipe_err_reason_t reason){
 	while(count -= 20+sizeof(uintptr_t)){
-		struct _hv_tls_packet_detach d = {.packet_on_heap = SIZE_MAX};
 		uintptr_t udata = dropped[5];
 	#if UINTPTR_MAX > UINT32_MAX
 		udata |= (uintptr_t)dropped[6] << 32;
 	#endif
-		_hv_fire_pipe(s, dropped, (uint8_t*)udata, (SIZE_MAX-63) | reason, &d);
+		_hv_fire_pipe_err(s, dropped, (void*)udata, reason);
 		dropped += 6 + (UINTPTR_MAX > UINT32_MAX);
 	}
 }
@@ -242,17 +240,16 @@ static bool _hv_filter_send_queue(hivemind_server_t* s, struct _hv_remote* state
 static uint64_t _hv_drain_writes(struct _hv_remote* state, uint64_t now, bool bypass){
 	if unlikely((state->rtt_gate_lo&5)==4){
 		// network partition
+		if(now - state->last_ack > state->server->message_timeout) goto timeout;
 		uint32_t rtt_gate = (uint32_t)state->rtt_gate_lo | (uint32_t)state->rtt_gate_hi<<16;
-		if(rtt_gate < 256){
+		if(rtt_gate < 8){
 			// Timer expired, send a probe packet
 			uint8_t packet[40];
 			remote_t to = {.addr = state->addr, .port = state->port};
-			if(bypass) _hv_crcinitless_packet_finish(state->server, &to, packet, 0, 0);
-			else _hv_keyless_packet_finish(state->server, &to, packet, 0, 0);
-			unsigned gen = rtt_gate>>3 & 31;
-			if(gen < 24) gen++;
-			rtt_gate = 4 | gen<<3 | ((1u<<(gen>>1))-1)<<8;
-		}else{ rtt_gate -= 256; }
+			if(bypass) _hv_standalone_bypass_packet_finish(state->server, &to, packet, 0, 0);
+			else _hv_standalone_packet_finish(state->server, &to, packet, 0, 0);
+			rtt_gate = 4096;
+		}else{ rtt_gate -= 8; }
 		state->rtt_gate_lo = rtt_gate; state->rtt_gate_hi = rtt_gate>>16;
 		return now;
 	}
@@ -267,13 +264,16 @@ static uint64_t _hv_drain_writes(struct _hv_remote* state, uint64_t now, bool by
 
 	// find unacked
 	struct _hv_send_packet *packet = state->send_order_start, *packet0 = packet, *fpacket;
-	uint64_t cutoff = (uint64_t)(state->min_latency + (state->avg_latency-state->min_latency)*4.);
-	if(cutoff < _HV_SEND_TICK*2) cutoff = _HV_SEND_TICK*2;
-	cutoff = (now - cutoff) << 21;
+	uint64_t cutoff = now;
+	if(!isinf(state->min_latency)){
+		cutoff = (uint64_t)(state->min_latency + (state->avg_latency-state->min_latency)*4.);
+		if(cutoff < _HV_SEND_TICK*2) cutoff = _HV_SEND_TICK*2;
+		cutoff = (now - cutoff) << 20;
+	}
 	struct _hv_send_packet** replace = 0;
 	uint32_t base = _hv_send_base(state);
 	if(packet){
-		if unlikely(packet->resent /* short-circuit */ && now - state->last_ack > state->server->message_timeout){
+		if unlikely(packet->resent /* short-circuit */ && now - state->last_ack > state->server->message_timeout) timeout: {
 			uint32_t pipe0[5] = {};
 			array_buffer_t dropped = {};
 			_hv_filter_send_queue(state->server, state, pipe0, pipe0, false, bypass, &dropped);
@@ -286,12 +286,17 @@ static uint64_t _hv_drain_writes(struct _hv_remote* state, uint64_t now, bool by
 			return l;
 		}
 		for(;;){
-			if((int64_t)((packet->time_lo<<21) - cutoff) >= 0){
+			if((int64_t)((packet->time_lo<<20) - cutoff) >= 0) exit_loop: {
 				if(packet == packet0) packet0 = 0;
 				state->send_order_start = packet;
 				break;
 			}
-			packet->resent = 1;
+			if unlikely(packet->resent++ == 7){
+				// go into probe mode
+				state->rtt_gate_lo = 4; state->rtt_gate_hi = 0;
+				packet->resent = 1;
+				goto exit_loop;
+			}
 			sent += (packet->len4<<2)+48;
 			// Not in send order while being resent, acks for it are ignored until it's relinked
 			uintptr_t tagged = (uintptr_t)replace | 1;
@@ -435,9 +440,9 @@ static uint64_t _hv_drain_writes(struct _hv_remote* state, uint64_t now, bool by
 		if(bypass){
 			uint64_t crcinit = /*state->send_crcinit*/ chacha_in[4] | (uint64_t)chacha_in[5]<<32, crc;
 			if(packet->kex){
-				crc = crc64(crcinit, (uint8_t*)packet->payload4, (packet->len4<<2)+2);
+				crc = crc64(crcinit, (uint8_t*)packet->payload4, (packet->len4<<2)-2);
 				packet->payload4[2] = htole32(crcinit); packet->payload4[3] = htole32(crcinit>>32);
-			}else{ crc = crc64(crcinit, (uint8_t*)packet->payload4, (packet->len4<<2)+(packet->first ? 3 : 0)); }
+			}else{ crc = crc64(crcinit, (uint8_t*)packet->payload4, (packet->len4<<2) - packet->first); }
 			packet->payload4[0] = htole32(crc); packet->payload4[1] = htole32(crc>>32);
 		}else{ _hv_encrypt_packet(chacha_in, packet); }
 		_hv_send_packet(state, packet, now, bypass);
@@ -529,7 +534,7 @@ static void _hv_ackd(struct _hv_remote* state, uint8_t* packet, unsigned plen, u
 			if(i_minlat > 1.f/_HV_SEND_TICK) i_minlat = 1.f/_HV_SEND_TICK;
 			float ipprt = state->us_per_byte * ((p->len4<<2)+48) * i_minlat;
 			if(ipprt > 1.f) ipprt = 1.f;
-			float lat = (int64_t)((t - p->time_lo)<<21)>>21;
+			float lat = (int64_t)((t - p->time_lo)<<20)>>20;
 			float dt = (float)(t - state->min_latency_when) * i_minlat * .03125f;
 			if(lat < state->min_latency * (dt < 1.f ? 1.f : dt)){
 				state->min_latency = lat;
@@ -622,8 +627,8 @@ static void _hv_queue_ack(struct _hv_remote* state, uint64_t lo, uint32_t hi, ui
 			}
 			uint64_t crc = crc64(state->recv_crcinit, packet, 8+(i<<2));
 			*(uint32_t*)packet = htole32(crc); *(uint32_t*)(packet+4) = htole32(crc>>32);
-			bool send_success = x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet, 9+(i<<2));
-			soft_assert(send_success);
+			
+			soft_assert(x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet, 9+(i<<2)));
 		}else{
 			uint32_t chacha[30] = CHACHA20_INIT;
 			memcpy(chacha+4, state->recv_key, 32);
@@ -636,8 +641,8 @@ static void _hv_queue_ack(struct _hv_remote* state, uint64_t lo, uint32_t hi, ui
 			for(unsigned j = 1; j < i; j++)
 				pl[j] = htole32(state->ack_coal_buf[j-1]);
 			Poly1305(packet+20, (i<<2)-4, (uint8_t*)chacha, packet);
-			bool send_success = x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet, 16+(i<<2));
-			soft_assert(send_success);
+
+			soft_assert(x_udp_send(_hv_state_handle(state), (remote_t){state->addr, state->port, 0, 0}, (char*)packet, 16+(i<<2)));
 		}
 		state->ack_coal_i = 0;
 		if(!imm) goto add; // forced immediate send from overflow

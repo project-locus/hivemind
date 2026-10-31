@@ -59,18 +59,33 @@ static void* _hv_pipe_acquire(hivemind_server_t* s, const uint32_t id[5]){
 	}
 	return p;
 }
-// Invoke the handler on a pipe from _hv_pipe_acquire, then release its slot (unless the handler already did via hivemind_pipe_unlock) and pipes_lock
+// Invoke the message handler on a pipe from _hv_pipe_acquire, then release its slot (unless the handler already did via hivemind_pipe_unlock) and pipes_lock
 static inline void _hv_fire_pipe_end(hivemind_server_t* s, void* pipe, const uint8_t* data, size_t len, struct _hv_tls_packet_detach* d){
 	struct _hv_pipe* p = (struct _hv_pipe*)pipe;
 	d->pipe_lock = &p->ref;
 	tls_packet_detach = d;
-	s->on_msg(s->udata, p->udata, data, len);
+	s->on_pipe_msg(s->udata, p->udata, data, len);
 	if(d->pipe_lock) lock_release(d->pipe_lock, 1);
+	shared_lock_release(&s->pipes_lock);
+}
+// Invoke the error handler on a pipe from _hv_pipe_acquire, then release its slot (unless the handler already did via hivemind_pipe_unlock) and pipes_lock
+static inline void _hv_fire_pipe_err_end(hivemind_server_t* s, void* pipe, void* data, hivemind_pipe_err_reason_t r){
+	struct _hv_pipe* p = (struct _hv_pipe*)pipe;
+	struct _hv_tls_packet_detach d = {.packet_on_heap = SIZE_MAX};
+	d.pipe_lock = &p->ref;
+	tls_packet_detach = &d;
+	s->on_pipe_err(s->udata, p->udata, data, r);
+	if(d.pipe_lock) lock_release(d.pipe_lock, 1);
 	shared_lock_release(&s->pipes_lock);
 }
 static inline bool _hv_fire_pipe(hivemind_server_t* s, const uint32_t id[5], const uint8_t* data, size_t len, struct _hv_tls_packet_detach* d){
 	void* p = _hv_pipe_acquire(s, id);
 	if(p) _hv_fire_pipe_end(s, p, data, len, d);
+	return !!p;
+}
+static inline bool _hv_fire_pipe_err(hivemind_server_t* s, const uint32_t id[5], void* data, hivemind_pipe_err_reason_t r){
+	void* p = _hv_pipe_acquire(s, id);
+	if(p) _hv_fire_pipe_err_end(s, p, data, r);
 	return !!p;
 }
 
@@ -214,21 +229,21 @@ static void* _hv_kill_pipe(hivemind_server_t* s, const uint32_t id[5]){
 	return d;
 }
 
-static inline void _hv_keyless_sig(hivemind_server_t* s, const remote_t* from, uint32_t knonce[5], uint32_t* out_tag, uint32_t* out_xor, unsigned xor_count){
+static inline void _hv_make_signed_auth(hivemind_server_t* s, const remote_t* to, uint32_t knonce[5], uint32_t* out_tag, uint32_t* out_xor, unsigned xor_count){
 	assert(xor_count <= 8);
 	_hv_alloc_id(s, knonce, epoch_now()/MILLISECOND_US);
 	uint32_t chacha[16] = {0x2d6d6172, 0x6b636170, 0x6b206465, 0x68637865}; // "ram-packed kexch"
 	memcpy(chacha+4, s->master_key, 32);
 	for(unsigned i = 0; i < 4; i++) chacha[i+2] ^= le32toh(s->addr.dwords[i]);
-	for(unsigned i = 0; i < 4; i++) chacha[i+6] ^= le32toh(from->addr.dwords[i]);
-	chacha[10] ^= (uint32_t)(le16toh(s->port_le)<<16 | from->port);
+	for(unsigned i = 0; i < 4; i++) chacha[i+6] ^= le32toh(to->addr.dwords[i]);
+	chacha[10] ^= (uint32_t)(le16toh(s->port_le)<<16 | to->port);
 	chacha[11] ^= le32toh(knonce[0]);
 	for(unsigned i = 0; i < 4; i++) chacha[12+i] = le32toh(knonce[i+1]);
 	ChaCha20_block(chacha);
 	memcpy(out_tag, chacha, 32);
 	if(out_xor) for(unsigned i = 0; i < xor_count; i++) out_xor[i] ^= chacha[i+8];
 }
-static inline uint64_t _hv_keyless_sig2(hivemind_server_t* s, const remote_t* from, const uint32_t knonce[static restrict 5], uint32_t out_tag[static restrict 8], uint32_t* restrict out_xor, unsigned xor_count){
+static inline uint64_t _hv_consume_signed_auth(hivemind_server_t* s, const remote_t* from, const uint32_t knonce[static restrict 5], uint32_t out_tag[static restrict 8], uint32_t* restrict out_xor, unsigned xor_count){
 	uint32_t chacha[16] = {0x2d6d6172, 0x6b636170, 0x6b206465, 0x68637865}; // "ram-packed kexch"
 	memcpy(chacha+4, s->master_key, 32);
 	for(unsigned i = 0; i < 4; i++) chacha[i+2] ^= le32toh(from->addr.dwords[i]);
@@ -244,18 +259,18 @@ static inline uint64_t _hv_keyless_sig2(hivemind_server_t* s, const remote_t* fr
 
 static void _hv_ram_packed_kex(hivemind_server_t* s, struct _hv_remote* state, uint32_t out_packet[static restrict 5]){
 	remote_t to = {.addr = state->addr, .port = state->port};
-	_hv_keyless_sig(s, &to, out_packet, state->send_key, 0, 0);
+	_hv_make_signed_auth(s, &to, out_packet, state->send_key, 0, 0);
 }
 
 static uint64_t _hv_ram_packed_kex_verify(hivemind_server_t* s, const remote_t* from, uint32_t out_key[static restrict 8], const uint32_t in_packet[static restrict 5]){
-	uint64_t t = epoch_now()/MILLISECOND_US, t1 = _hv_keyless_sig2(s, from, in_packet, out_key, 0, 0);
+	uint64_t t = epoch_now()/MILLISECOND_US, t1 = _hv_consume_signed_auth(s, from, in_packet, out_key, 0, 0);
 	if((t > t1 ? t-t1 : t1-t) > _HV_STATE_LIFETIME/1000) return 0;
 #ifndef HIVEMIND_NO_RECV_TSF
-#ifdef THREAD_SPECULATION_FENCE_AVAILABLE
-	thread_speculation_fence();
-#elif !defined(WNO_THREAD_SFENCE_MISSING) // to be supplied via -D
-	#warning Thread speculation fence unavailable on this architecture
-#endif
+	#ifdef THREAD_SPECULATION_FENCE_AVAILABLE
+		thread_speculation_fence();
+	#elif !defined(WNO_THREAD_SFENCE_MISSING) // to be supplied via -D
+		#warning Thread speculation fence unavailable on this architecture
+	#endif
 #endif
 	return t1;
 }
@@ -428,30 +443,31 @@ static void _hv_encrypt_packet(uint32_t chacha[16], struct _hv_send_packet* p){
 	uint32_t* end = p->payload4+p->len4;
 	for(unsigned i = 15; pl < end;) *--end ^= d[i];
 
-	Poly1305((uint8_t*)pl, (size_t)((p->len4-hdr)<<2), (uint8_t*)d, (uint8_t*)(p->payload4+hdr));
+	Poly1305((uint8_t*)(p->payload4 + hdr), (size_t)((p->len4-hdr)<<2), (uint8_t*)d, (uint8_t*)p->payload4);
 }
 
-static inline void _hv_keyless_packet_finish(hivemind_server_t* s, const remote_t* to, uint8_t* packet, unsigned payload_len, uint32_t opts){
+static inline void _hv_standalone_packet_finish(hivemind_server_t* s, const remote_t* to, uint8_t* packet, unsigned payload_len, uint32_t opts){
 	uint32_t poly_key[8];
-	_hv_keyless_sig(s, to, (uint32_t*)(packet+20), poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 32 : payload_len>>2);
-	*(uint32_t*)(packet+16) = *(uint32_t*)(packet+20); *(uint32_t*)(packet+20) = htole32(opts<<8);
-	uint32_t knonce4 = *(uint32_t*)(packet+36); *(uint32_t*)(packet+36) = opts;
-	Poly1305(packet+36, payload_len+4, (uint8_t*)poly_key, packet);
+	_hv_make_signed_auth(s, to, (uint32_t*)(packet+20), poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2);
+	*(uint32_t*)(packet+16) = *(uint32_t*)(packet+20);
+	*(uint32_t*)(packet+20) = htole32(opts<<8);
+	uint32_t knonce4 = *(uint32_t*)(packet+36);
+	*(uint32_t*)(packet+36) = htole32(opts);
+	Poly1305(packet+36, payload_len + 4, (uint8_t*)poly_key, packet);
 	*(uint32_t*)(packet+36) = knonce4;
-	bool send_success = x_udp_send(s->handle, *to, (char*)packet, payload_len+40);
-	soft_assert(send_success);
+	soft_assert(x_udp_send(s->handle, *to, (char*)packet, payload_len + 40));
 }
 
-static inline void _hv_crcinitless_packet_finish(hivemind_server_t* s, const remote_t* to, uint8_t* packet, unsigned payload_len, uint32_t opts){
+static inline void _hv_standalone_bypass_packet_finish(hivemind_server_t* s, const remote_t* to, uint8_t* packet, unsigned payload_len, uint32_t opts){
 	uint64_t shash = _hv_mix64_addr(s->addr, le16toh(s->port_le)), dhash = _hv_mix64_addr(to->addr, to->port);
 	*(uint32_t*)packet = htole32(shash); *(uint32_t*)(packet+4) = htole32(shash>>32);
 	*(uint32_t*)(packet+8) = htole32(dhash); *(uint32_t*)(packet+16) = htole32(dhash>>32);
 	*(uint32_t*)(packet+12) = htole32(opts<<8);
-	uint64_t id = _hv_alloc_id_short(s), crc = crc64(id, packet, payload_len + 20);
+	uint64_t id = epoch_now()/MILLISECOND_US, crc = crc64(id, packet, payload_len + 20);
 	*(uint32_t*)(packet+8) = htole32(id); *(uint32_t*)(packet+16) = htole32(id>>32);
 	*(uint32_t*)packet = htole32(crc); *(uint32_t*)(packet+4) = htole32(crc>>32);
-	bool send_success = x_udp_send(s->handle, *to, (char*)packet, payload_len + 21);
-	soft_assert(send_success);
+	packet[payload_len+20] = 0;
+	soft_assert(x_udp_send(s->handle, *to, (char*)packet, payload_len + 21));
 }
 
 void _hv_add_to_send_pipe(struct _hv_remote* state, const uint32_t id[restrict 5], struct _hv_send_packet* nfirst, struct _hv_send_packet** nlast, size_t dwords, struct _hv_send_packet_placeholder* plch){
@@ -527,7 +543,7 @@ uint32_t _hv_find_pipe_last(struct _hv_remote* state, const uint32_t pipeid[rest
 	plch->prevp = pipe_state->end;
 	plch->next = 0;
 	pipe_state->end = &plch->next;
-#ifdef __SIZEOF_INT128__
+#ifdef _HV_ATOMIC_128
 	unsigned __int128 cur = ((__int128)state->send_seq_lo | (__int128)state->send_seq_hi<<64);
 	unsigned __int128 last = ((__int128)pipe_state->dependency_lo | (__int128)pipe_state->dependency_hi<<64);
 	return cur-last < 0x80000000 ? (uint32_t)pipe_state->dependency_lo : self;
@@ -650,4 +666,31 @@ static inline void _hv_finish(hivemind_server_t* s){
 	if(s->buckets_exp >= 2) _hv_free(s->remote_buckets, sizeof(struct _hv_remote*) * buckets);
 	s->remote_buckets = 0; s->remote_count = 0;
 	s->buckets_exp = 0;
+}
+
+static inline void _hivemind_resolve_key(uint32_t state[16], uint32_t epoch){
+	uint32_t old_epoch = state[0];
+	if(old_epoch >= epoch) return;
+	if((epoch>>15) != (old_epoch>>15)){
+		old_epoch = (old_epoch + 0x7FFF) & ~0x7FFF;
+		goto start;
+		do{
+			old_epoch += 0x8000;
+			for(unsigned i = 8; i < 16; i++) state[i] = le32toh(state[i]);
+			start:
+			memcpy(state, &(uint32_t[4])CHACHA20_INIT, 16);
+			state[4] = state[8] ^ state[9] ^ state[10] ^ state[11];
+			state[5] = state[12] ^ state[13] ^ state[14] ^ state[15];
+			state[6] = 0; state[7] = old_epoch;
+			ChaCha20_block(state);
+		}while((epoch>>15) != (old_epoch>>15));
+		for(unsigned i = 1; i < 16; i++) state[i] = le32toh(state[i]);
+		state[0] = old_epoch;
+	}
+	while(old_epoch < epoch){
+		uint32_t out[16];
+		ChaCha20_block_xor(state, (uint8_t*)out, 1);
+		for(unsigned i = 1; i < 8; i++) state[i] = le32toh(out[i] ^ out[i+8]);
+		state[0] = ++old_epoch;
+	}
 }

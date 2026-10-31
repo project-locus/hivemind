@@ -384,7 +384,7 @@ static void test_array_buffer_unit(void){
 	array_iterator_t it = array_buffer_iterator(&ab, 8, SIZE_MAX);
 	uint64_t v, expect = 1; int count = 0;
 	// count bound keeps a broken end condition from reading past the allocation
-	while(count <= 4 && array_iterator_next(&it, &v, 8)){
+	while(array_iterator_next(&it, &v, 8)){
 		CHECK(v == expect, "got %llu expected %llu", (unsigned long long)v, (unsigned long long)expect);
 		expect++; count++;
 	}

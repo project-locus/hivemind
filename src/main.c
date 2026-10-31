@@ -1,8 +1,9 @@
+#include "a.h"
 #include "tasks.c"
 
-void hivemind_init(hivemind_server_t* s, const uint8_t master_key[32], hivemind_on_pipe_msg_fn_t on_msg){
+void hivemind_init(hivemind_server_t* s, const uint8_t master_key[64], hivemind_on_pipe_msg_fn_t on_msg){
 	memset(s, 0, sizeof(*s));
-	s->on_msg = on_msg;
+	s->on_pipe_msg = on_msg;
 	s->udata = s;
 	s->message_timeout = 900 * SECOND_US;
 	s->backpressure_limit = 2147483648;
@@ -13,10 +14,19 @@ void hivemind_init(hivemind_server_t* s, const uint8_t master_key[32], hivemind_
 	shared_lock_init(&s->state_lock);
 	shared_lock_init(&s->pipes_lock);
 	x_randombytes(s->_rand_bytes, 16);
-#ifndef __SIZEOF_INT128__
+#ifndef _HV_ATOMIC_128
 	atomic_init(&s->_id_lock, ATOMIC_FLAG_INIT);
 #endif
-	for(unsigned i = 0; i < 8; i++) s->master_key[i] = (uint32_t)master_key[i<<2] | (uint32_t)master_key[i<<2 | 1]<<8 | (uint32_t)master_key[i<<2 | 2]<<16 | (uint32_t)master_key[i<<2 | 3]<<24;
+	uint32_t epoch = (uint32_t)((epoch_now()/1000) >> 24) - 1;
+	if(!master_key){
+		s->master_key[0] = epoch;
+		x_randombytes(s->master_key+1, 60);
+	}else{
+		for(unsigned i = 0; i < 16; i++){
+			s->master_key[i] = (uint32_t)(master_key[i<<2]) | (uint32_t)master_key[i<<2|1]<<8 | (uint32_t)master_key[i<<2|2]<<16 | (uint32_t)master_key[i<<2|3]<<24;
+		}
+		_hivemind_resolve_key(s->master_key, epoch);
+	}
 }
 bool hivemind_start(hivemind_server_t* s, remote_t where, ip_addr_t reflect_test){
 	x_socket_t sock = x_udp_bound(where);
@@ -74,51 +84,80 @@ bool hivemind_start(hivemind_server_t* s, remote_t where, ip_addr_t reflect_test
 	return true;
 }
 
-uint8_t* hivemind_packet_detach(const uint8_t* p){
+void hivemind_resolve_key(const uint8_t in[64], uint8_t out[64]){
+	uint32_t epoch = (uint32_t)((epoch_now()/1000) >> 24) - 1;
+	if(!in){
+		out[0] = epoch; out[1] = epoch>>8;
+		out[2] = epoch>>16; out[3] = epoch>>24;
+		x_randombytes(out+4, 60);
+		return;
+	}
+	uint32_t state[16];
+	for(unsigned i = 0; i < 16; i++){
+		state[i] = (uint32_t)(in[i<<2]) | (uint32_t)in[i<<2|1]<<8 | (uint32_t)in[i<<2|2]<<16 | (uint32_t)in[i<<2|3]<<24;
+	}
+	_hivemind_resolve_key(state, epoch);
+	for(unsigned i = 0; i < 16; i++){
+		out[i<<2] = (uint8_t)state[i]; out[i<<2|1] = (uint8_t)(state[i]>>8);
+		out[i<<2|2] = (uint8_t)(state[i]>>16); out[i<<2|3] = (uint8_t)(state[i]>>24);
+	}
+}
+
+inline void hivemind_get_key(hivemind_server_t* s, uint8_t out[64]){
+
+	for(unsigned i = 0; i < 16; i++){
+		uint32_t v = s->master_key[i];
+		out[i<<2] = (uint8_t)v; out[i<<2|1] = (uint8_t)(v>>8);
+		out[i<<2|2] = (uint8_t)(v>>16); out[i<<2|3] = (uint8_t)(v>>24);
+	}
+}
+
+inline uint8_t* hivemind_packet_detach(const uint8_t* p){
 	struct _hv_tls_packet_detach* d = tls_packet_detach;
 	struct _hv_vq* b = d->vq_block;
 	if(b){
 		*(struct _hv_vq**)(p - 20) = b;
-		*(size_t*)(p - 20 + sizeof(struct _hv_vq*)) = d->packet_on_heap;
-		*(uint16_t*)(p - 2) = 0xffff;
+		struct _hv_alloc_offsets* hdr = (struct _hv_alloc_offsets*)(p - sizeof(struct _hv_alloc_offsets));
+		hdr->sz = (uint16_t)d->packet_on_heap; hdr->sz_hi = (uint32_t)(d->packet_on_heap>>16);
+		hdr->off = 0xffff;
 		atomic_fetch_add_explicit(&b->ref, 1, memory_order_relaxed);
 		d->packet_on_heap = SIZE_MAX; d->vq_block = 0;
 		return (uint8_t*)p;
 	}
 	if(d->packet_on_heap >= SIZE_MAX-1){ d->packet_on_heap |= 1; return (uint8_t*)p; }
-	uint8_t* p2 = (uint8_t*)_hv_alloc(d->packet_on_heap);
-	if(d->packet_on_heap) memcpy(p2, p, d->packet_on_heap);
+	size_t sz = d->packet_on_heap + sizeof(struct _hv_alloc_offsets);
+	struct _hv_alloc_offsets* hdr = (struct _hv_alloc_offsets*)_hv_alloc(sz);
+	if(d->packet_on_heap) memcpy(hdr->data, p, d->packet_on_heap);
 	d->packet_on_heap = SIZE_MAX;
-	return p2;
+	hdr->off = sizeof(struct _hv_alloc_offsets);
+	hdr->sz = (uint16_t)sz; hdr->sz_hi = (uint32_t)(sz>>16);
+	return hdr->data;
 }
-void hivemind_packet_free(const uint8_t* p){
-	if((uintptr_t)p & 7){
-		uint16_t off = *(uint16_t*)(p-2);
-		if(off == 0xffff){
-			p -= 20;
-			struct _hv_vq* b = *(struct _hv_vq**)p;
-			vqueue_free(&b->q, (vqueue_block_t){.size = *(size_t*)(p+sizeof(struct _hv_vq*)), .data = (uint8_t*)p});
-			if unlikely(atomic_fetch_sub_explicit(&b->ref, 1, memory_order_acq_rel) == 1){
-				vqueue_close(&b->q);
-				_hv_free(b, sizeof(struct _hv_vq));
-			}
-			return;
+inline void hivemind_packet_free(const uint8_t* p){
+	struct _hv_alloc_offsets* hdr = (struct _hv_alloc_offsets*)(p - sizeof(struct _hv_alloc_offsets));
+	if(hdr->off == 0xffff){
+		p -= 20;
+		struct _hv_vq* b = *(struct _hv_vq**)p;
+		vqueue_free(&b->q, (vqueue_block_t){.size = *(size_t*)(p+sizeof(struct _hv_vq*)), .data = (uint8_t*)p});
+		if unlikely(atomic_fetch_sub_explicit(&b->ref, 1, memory_order_acq_rel) == 1){
+			vqueue_close(&b->q);
+			_hv_free(b, sizeof(struct _hv_vq));
 		}
-		p -= off;
+	}else{
+		_hv_free(hdr->data - hdr->off, (size_t)hdr->sz|(size_t)hdr->sz_hi<<16);
 	}
-	free((void*)p);
 }
-void hivemind_pipe_unlock(void){
+inline void hivemind_pipe_unlock(void){
 	struct _hv_tls_packet_detach* d = tls_packet_detach;
 	if(d->pipe_lock) lock_release(d->pipe_lock, 1), d->pipe_lock = 0;
 }
 
-void hivemind_create_pipe(hivemind_server_t* s, hivemind_pipe_t* pipe, void* udata, hivemind_pipe_qos_t qos){
+inline void hivemind_create_pipe(hivemind_server_t* s, hivemind_pipe_t* pipe, void* udata, hivemind_pipe_qos_t qos){
 	pipe->addr = s->addr; pipe->port_mtu_packed_le = s->port_mtu_packed_le | htole32((qos&3)<<16);
 	_hv_alloc_id(s, pipe->id, epoch_now()/MILLISECOND_US);
 	_hv_append_pipe(s, pipe->id, udata);
 }
-void* hivemind_close_pipe(hivemind_server_t* s, const hivemind_pipe_t* pipe){
+inline void* hivemind_close_pipe(hivemind_server_t* s, const hivemind_pipe_t* pipe){
 	assert(!memcmp(pipe->dwords, &s->dwords, 20));
 	return _hv_kill_pipe(s, pipe->id);
 }
@@ -217,7 +256,7 @@ void hivemind_send(hivemind_server_t* s, const hivemind_pipe_t* to, const uint8_
 			packet->payload4[2] = htole32(dhash); packet->payload4[3] = htole32(dhash>>32);
 			_hv_nalloc_id(s, state->send_key+3);
 			state->send_key[2] = 0;
-			state->send_crcinit = _hv_alloc_id_short(s);
+			state->send_crcinit = epoch_now()/MILLISECOND_US;
 		}else{
 			unsigned first_mtu = mtu;
 			header = 14;
@@ -258,10 +297,7 @@ void hivemind_send(hivemind_server_t* s, const hivemind_pipe_t* to, const uint8_
 			// Don't do this if coming from kex path (goto overflow;)
 			if(!plen) _hv_add_to_send_pipe(state, to->id, plch.next, &plch.next, 0, &plch);
 			_hv_time_lock_rel(&state->send_last_used, tim);
-			if(f_return_pipe){
-				struct _hv_tls_packet_detach d = {.packet_on_heap = SIZE_MAX};
-				_hv_fire_pipe(s, f_return_pipe->id, (uint8_t*)errudata, (SIZE_MAX-63) | HIVEMIND_CLOSED_BACKPRESSURE, &d);
-			}
+			if(f_return_pipe) _hv_fire_pipe_err(s, f_return_pipe->id, errudata, HIVEMIND_CLOSED_BACKPRESSURE);
 			return;
 		}
 	}

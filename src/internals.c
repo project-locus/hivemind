@@ -19,12 +19,21 @@ static_assert(CHAR_BIT == 8);
 #define memcmp16(a, b) (((uint64_t)(a)[0] | (uint64_t)(a)[1]<<32) ^ ((uint64_t)(b)[0] | (uint64_t)(b)[1]<<32)) | (((uint64_t)(a)[2] | (uint64_t)(a)[3]<<32) ^ ((uint64_t)(b)[2] | (uint64_t)(b)[3]<<32))
 
 static inline void* _hv_alloc(size_t bytes){
+#ifdef HIVEMIND_SIZED_FREE_VERIFY
+	bytes += sizeof(size_t);
+	void* addr = malloc(bytes + sizeof(size_t));
+	if(addr){
+		*(size_t*)addr = bytes;
+		addr += sizeof(size_t);
+	}else
+#else
 	void* addr = malloc(bytes);
-	if unlikely(!addr){
+	if unlikely(!addr)
+#endif
+	{
 		fputs("hivemind: _hv_alloc(): Heap out of memory\n", stderr);
 		abort();
 	}
-	assert(!((uintptr_t)addr&7)); // Aligned
 	return addr;
 }
 static inline void* _hv_alloc_a(size_t bytes, size_t to){
@@ -35,8 +44,13 @@ static inline void* _hv_alloc_a(size_t bytes, size_t to){
 	}
 	return addr;
 }
-#define _HV_ALLOCATOR_SIZED 0
-static inline void _hv_free(void* addr, size_t bytes){ free(addr); (void)bytes; }
+static inline void _hv_free(void* addr, size_t bytes){
+#ifdef HIVEMIND_SIZED_FREE_VERIFY
+	addr -= sizeof(size_t);
+	assert(bytes == *(size_t*)addr);
+#endif
+	free(addr); (void)bytes;
+}
 
 // Used by hashmaps
 static inline uint64_t _hv_mix64(uint64_t x){
@@ -54,7 +68,7 @@ static inline uint64_t _hv_mix64_addr(ip_addr_t addr, uint16_t port){
 
 struct _hv_send_packet{
 	struct _hv_send_packet* next; // can be tagged before its in send order linked list (but not after)
-	uint64_t len4:14, resent:1, first:1, kex:1, has_err_fb:1, time_lo:46;
+	uint64_t len4:14, resent:3, first:1, kex:1, has_err_fb:1, time_lo:44;
 	uint32_t payload4[];
 };
 
@@ -69,9 +83,10 @@ static inline uint32_t _hv_lseqof(struct _hv_send_packet* p, bool bypass){
 	return p->kex ? 0 : le32toh(*(uint32_t*)(p->payload4+(bypass ? 2 : 4)));
 }
 
-#ifdef __SIZEOF_INT128__
-typedef signed __int128 int128_t;
-typedef unsigned __int128 uint128_t;
+#if defined(__SIZEOF_INT128__) && !defined(HIVEMIND_NO_CX16)
+	typedef signed __int128 int128_t;
+	typedef unsigned __int128 uint128_t;
+	#define _HV_ATOMIC_128
 #endif
 
 struct _hv_remote_vq{
@@ -190,7 +205,7 @@ struct _hv_remote{
 
 	alignas(16) char unused_[16];
 };
-#define _HV_REMOTE_SIZE (sizeof(struct _hv_remote)-16)
+#define _HV_REMOTE_SIZE (sizeof(struct _hv_remote))
 
 // We don't need it to be 384 exactly but we wanna know if it ever jumps up
 // In that case, either reshuffle fields to keep it same size or increase this assert to the new size
@@ -270,13 +285,13 @@ struct hivemind_server{
 	void* udata;
 	uint64_t message_timeout;
 	size_t backpressure_limit;
-	hivemind_on_pipe_msg_fn_t on_msg;
-	hivemind_on_pipe_close_fn_t on_err;
+	hivemind_on_pipe_msg_fn_t on_pipe_msg;
+	hivemind_on_pipe_err_fn_t on_pipe_err;
 	hivemind_generic_fn_t open_close_cb;
 	hivemind_pipe_finish_fn_t finish_cb;
 	uint32_t master_key[16];
 	uint32_t master_key_old[8];
-#ifdef __SIZEOF_INT128__
+#ifdef _HV_ATOMIC_128
 	union{
 		atomic(uint128_t) _id;
 		char _rand_bytes[16];
@@ -304,7 +319,7 @@ struct hivemind_server{
 
 static_assert(sizeof(hivemind_server_t) <= 320);
 
-#ifdef __SIZEOF_INT128__
+#ifdef _HV_ATOMIC_128
 	#pragma clang diagnostic push
 	#pragma clang diagnostic ignored "-Watomic-alignment"
 	static void _hv_alloc_id(hivemind_server_t* s, uint32_t out[5], uint64_t t){
@@ -319,11 +334,6 @@ static_assert(sizeof(hivemind_server_t) <= 320);
 		out[0] = htole32(t>>24); out[1] = htole32(t&0xffffff | v>>96<<24);
 		out[2] = htole32(v>>64); out[3] = htole32(v>>32);
 		out[4] = htole32(v);
-	}
-	static inline uint64_t _hv_alloc_id_short(hivemind_server_t* s){
-		uint64_t t = epoch_now()/MILLISECOND_US;
-		uint64_t lo = (uint64_t)atomic_fetch_add_explicit(&s->_id, 1, memory_order_relaxed);
-		return t<<8 | (lo&0xff);
 	}
 	#pragma clang diagnostic pop
 #else
@@ -346,14 +356,6 @@ static_assert(sizeof(hivemind_server_t) <= 320);
 		out[0] = htole32(t); out[1] = htole32(t<<8>>40 | hi>>32<<24);
 		out[2] = htole32(hi); out[3] = htole32(lo>>32);
 		out[4] = htole32(lo);
-	}
-	static inline uint64_t _hv_alloc_id_short(hivemind_server_t* s){
-		uint64_t t = epoch_now()/MILLISECOND_US;
-		uint8_t spin = 32;
-		while(atomic_flag_test_and_set_explicit(&s->_id_lock, memory_order_acquire)) if(spin) spin--, thread_relax(); else thread_yield();
-		uint64_t lo = s->_id_lo++; if(lo == -1ull) s->_id_hi++;
-		atomic_flag_clear_explicit(&s->_id_lock, memory_order_release);
-		return t<<8 | (lo&0xff);
 	}
 #endif
 
@@ -409,6 +411,12 @@ static inline void _hv_resolve_seq(uint64_t* lo, uint32_t* hi, uint32_t seq){
 	*lo = lo2 + ((lo2-lo1+(0x80000000))&0xffffffff00000000);
 	*hi += (lo2>>32)-(lo1>>32);
 }
+
+struct _hv_alloc_offsets{
+	uint32_t sz_hi;
+	uint16_t sz, off;
+	uint8_t data[];
+};
 
 struct _hv_packet_reassembly{
 	size_t total; union{ size_t cur; uint32_t pipe_next; };
