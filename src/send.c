@@ -113,7 +113,10 @@ static struct _hv_send_packet* _hv_kexify(hivemind_server_t* s, struct _hv_remot
 		_hv_nalloc_id(s, state->send_key+3);
 		state->send_key[2] = 0;
 		state->send_crcinit = epoch_now()/MILLISECOND_US;
-	}else{ _hv_ram_packed_kex(s, state, f->payload4+4); }
+	}else{
+		remote_t to = {.addr = state->addr, .port = state->port};
+		_hv_make_signed_auth(s, &to, f->payload4+4, state->send_key, 0, 0, epoch_now()/MILLISECOND_US);
+	}
 	return f;
 }
 

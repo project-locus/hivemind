@@ -88,7 +88,7 @@ template<typename T_ = Self, typename P = void> struct Server: hivemind_server_t
 	Server(Args&&... a){ this->init(std::forward<Args>(a)...); }
 
 	// Initialize a server with the given master key and message callback
-	void init(const uint8_t master_key[32], MsgFn on_msg){
+	void init(const uint8_t master_key[64], MsgFn on_msg){
 		hivemind_init(this, master_key, (hivemind_on_pipe_msg_fn_t)on_msg);
 	}
 	
@@ -130,16 +130,16 @@ template<typename T_ = Self, typename P = void> struct Server: hivemind_server_t
 	}
 };
 
-static std::array<uint8_t, 32> master_key_from_file(const char* filename){
-	std::array<uint8_t, 32> key;
+static std::array<uint8_t, 64> master_key_from_file(const char* filename){
+	std::array<uint8_t, 64> key;
 	x_file_t fd = x_open(filename, 0);
-	if(x_getsize(fd) < 32){
+	if(x_getsize(fd) < 64){
 		// Generate new key
-		x_randombytes(key.data(), 32);
-		x_write(fd, key.data(), 0, 32);
+		hivemind_resolve_key(NULL, key.data());
+		x_write(fd, key.data(), 0, 64);
 	}else{
 		// Load existing key
-		x_read(fd, key.data(), 0, 32);
+		x_read(fd, key.data(), 0, 64);
 	}
 	x_close(fd);
 	return key;

@@ -289,8 +289,8 @@ struct hivemind_server{
 	hivemind_on_pipe_err_fn_t on_pipe_err;
 	hivemind_generic_fn_t open_close_cb;
 	hivemind_pipe_finish_fn_t finish_cb;
-	uint32_t master_key[16];
-	uint32_t master_key_old[8];
+	atomic(uint32_t) master_key_state[16];
+	atomic(uint32_t) master_key_next[8];
 #ifdef _HV_ATOMIC_128
 	union{
 		atomic(uint128_t) _id;
@@ -402,7 +402,7 @@ static void _hv_time_lock_acq_excl(atomic(uint64_t)* ptr, uint32_t* ref){
 
 #define _HV_SEND_BURST 6000
 #define _HV_SEND_TICK 2000 // 2ms in useconds
-#define _HV_STATE_LIFETIME 14400000000 // 4h in useconds
+#define _HV_STATE_LIFETIME 7200000000 // 2h in useconds
 
 // Resolve a 96-bit sequence number from the low 32 bits and a reference sequence number
 // The returned sequence number is within +/- 2^31 of the reference sequence number
@@ -469,3 +469,13 @@ static void _hv_remote_cleanup_send(struct _hv_remote* state){
 	hash_table_set_rank(&state->pipes_with_unsent_b, 0);
 	state->qd_bytes4 = 0;
 }
+
+#define _hv_tsf() ((void)0)
+#ifndef HIVEMIND_NO_RECV_TSF
+	#ifdef THREAD_SPECULATION_FENCE_AVAILABLE
+		#undef _hv_tsf
+		#define _hv_tsf() thread_speculation_fence()
+	#elif !defined(WNO_THREAD_SFENCE_MISSING) // to be supplied via -D
+		#warning Thread speculation fence unavailable on this architecture
+	#endif
+#endif

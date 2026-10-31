@@ -1,4 +1,3 @@
-#include "a.h"
 #include "tasks.c"
 
 void hivemind_init(hivemind_server_t* s, const uint8_t master_key[64], hivemind_on_pipe_msg_fn_t on_msg){
@@ -18,15 +17,20 @@ void hivemind_init(hivemind_server_t* s, const uint8_t master_key[64], hivemind_
 	atomic_init(&s->_id_lock, ATOMIC_FLAG_INIT);
 #endif
 	uint32_t epoch = (uint32_t)((epoch_now()/1000) >> 24) - 1;
+	assert(epoch);
+	uint32_t state[16];
 	if(!master_key){
-		s->master_key[0] = epoch;
-		x_randombytes(s->master_key+1, 60);
+		state[0] = epoch;
+		x_randombytes(state+1, 60);
 	}else{
 		for(unsigned i = 0; i < 16; i++){
-			s->master_key[i] = (uint32_t)(master_key[i<<2]) | (uint32_t)master_key[i<<2|1]<<8 | (uint32_t)master_key[i<<2|2]<<16 | (uint32_t)master_key[i<<2|3]<<24;
+			state[i] = (uint32_t)(master_key[i<<2]) | (uint32_t)master_key[i<<2|1]<<8 | (uint32_t)master_key[i<<2|2]<<16 | (uint32_t)master_key[i<<2|3]<<24;
 		}
-		_hivemind_resolve_key(s->master_key, epoch);
+		_hivemind_resolve_key(state, epoch);
 	}
+	for(unsigned i = 0; i < 16; i++) atomic_init(s->master_key_state+i, state[i]);
+	_hivemind_resolve_key(state, epoch+1);
+	for(unsigned i = 0; i < 8; i++) atomic_init(s->master_key_next+i, state[i] ^ state[i+8]);
 }
 bool hivemind_start(hivemind_server_t* s, remote_t where, ip_addr_t reflect_test){
 	x_socket_t sock = x_udp_bound(where);
@@ -84,7 +88,7 @@ bool hivemind_start(hivemind_server_t* s, remote_t where, ip_addr_t reflect_test
 	return true;
 }
 
-void hivemind_resolve_key(const uint8_t in[64], uint8_t out[64]){
+inline void hivemind_resolve_key(const uint8_t in[64], uint8_t out[64]){
 	uint32_t epoch = (uint32_t)((epoch_now()/1000) >> 24) - 1;
 	if(!in){
 		out[0] = epoch; out[1] = epoch>>8;
@@ -104,12 +108,10 @@ void hivemind_resolve_key(const uint8_t in[64], uint8_t out[64]){
 }
 
 inline void hivemind_get_key(hivemind_server_t* s, uint8_t out[64]){
-
-	for(unsigned i = 0; i < 16; i++){
-		uint32_t v = s->master_key[i];
-		out[i<<2] = (uint8_t)v; out[i<<2|1] = (uint8_t)(v>>8);
-		out[i<<2|2] = (uint8_t)(v>>16); out[i<<2|3] = (uint8_t)(v>>24);
-	}
+	uint64_t t = epoch_now()/MILLISECOND_US;
+	uint32_t tmp[16];
+	_hv_get_master_key(s, t, t, tmp);
+	memcpy(out, tmp, 64);
 }
 
 inline uint8_t* hivemind_packet_detach(const uint8_t* p){
@@ -268,7 +270,8 @@ void hivemind_send(hivemind_server_t* s, const hivemind_pipe_t* to, const uint8_
 			last = num_packets == 1;
 			plen = last ? (unsigned)pad_len : first_mtu;
 			packet = (struct _hv_send_packet*)_hv_alloc(sizeof(struct _hv_send_packet) + 4*(true_plen = header+plen+2) + (last && f_return_pipe ? 20+sizeof(uintptr_t) : 0));
-			_hv_ram_packed_kex(s, state, packet->payload4+4);
+			remote_t to = {.addr = state->addr, .port = state->port};
+			_hv_make_signed_auth(s, &to, packet->payload4+4, state->send_key, 0, 0, epoch_now()/MILLISECOND_US);
 		}
 		total_size = pad_len + header + 2 + (num_packets-1)*(bypass ? 3 : 5);
 		packet->payload4[true_plen-1] = htole32(len&0xffff);

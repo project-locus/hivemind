@@ -29,7 +29,7 @@ void on_msg(hivemind_server_t* s, void* udata, const uint8_t* data2, size_t len)
 }
 
 #define PORT 3331
-uint8_t MASTER_KEY[32];
+uint8_t MASTER_KEY[64];
 
 void on_done(void* _){
 	atomic_fetch_add(&cnt, 1);
@@ -40,10 +40,10 @@ int main(){
 	srand48((long)mono_now());
 	uint64_t start = mono_now();
 	x_file_t f = x_open(".master.key", 0);
-	if(x_getsize(f) < 32){
-		x_randombytes(MASTER_KEY, 32);
-		x_write(f, MASTER_KEY, 0, 32);
-	}else{ x_read(f, MASTER_KEY, 0, 32); }
+	if(x_getsize(f) < 64){
+		hivemind_resolve_key(NULL, MASTER_KEY);
+		x_write(f, MASTER_KEY, 0, 64);
+	}else{ x_read(f, MASTER_KEY, 0, 64); }
 	x_close(f);
 	hivemind_init(&ser, MASTER_KEY, (void(*)(void*, void*, const uint8_t*, size_t)) on_msg);
 	if(!hivemind_start(&ser, (remote_t){{0}, PORT, 0, 0}, ip_from_string("127.0.0.1"))){

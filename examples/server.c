@@ -1,14 +1,14 @@
 #include <hivemind.h>
 
-void load_master_key(uint8_t key[32], const char* filename){
+void load_master_key(uint8_t key[64], const char* filename){
 	x_file_t fd = x_open(filename, 0);
-	if(x_getsize(fd) < 32){
+	if(x_getsize(fd) < 64){
 		// Generate new key
-		x_randombytes(key, 32);
-		x_write(fd, key, 0, 32);
+		hivemind_resolve_key(NULL, key);
+		x_write(fd, key, 0, 64);
 	}else{
 		// Load existing key
-		x_read(fd, key, 0, 32);
+		x_read(fd, key, 0, 64);
 	}
 	x_close(fd);
 }
@@ -19,7 +19,7 @@ void on_msg(hivemind_server_t* s, void* userdata, uint8_t* payload, size_t size)
 
 hivemind_server_t h_server;
 int main(){
-	uint8_t master_key[32];
+	uint8_t master_key[64];
 	load_master_key(master_key, "./.master.key");
 	hivemind_init(&h_server, master_key, (hivemind_on_pipe_msg_fn_t) on_msg);
 

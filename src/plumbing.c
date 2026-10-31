@@ -229,23 +229,27 @@ static void* _hv_kill_pipe(hivemind_server_t* s, const uint32_t id[5]){
 	return d;
 }
 
-static inline void _hv_make_signed_auth(hivemind_server_t* s, const remote_t* to, uint32_t knonce[5], uint32_t* out_tag, uint32_t* out_xor, unsigned xor_count){
+static inline bool _hv_get_master_key(hivemind_server_t* s, uint64_t t, uint64_t t1, uint32_t out[8]);
+
+static inline void _hv_make_signed_auth(hivemind_server_t* s, const remote_t* to, uint32_t knonce[5], uint32_t* out_tag, uint32_t* out_xor, unsigned xor_count, uint64_t t){
 	assert(xor_count <= 8);
-	_hv_alloc_id(s, knonce, epoch_now()/MILLISECOND_US);
+	_hv_alloc_id(s, knonce, t);
 	uint32_t chacha[16] = {0x2d6d6172, 0x6b636170, 0x6b206465, 0x68637865}; // "ram-packed kexch"
-	memcpy(chacha+4, s->master_key, 32);
+	_hv_get_master_key(s, t, t, chacha+4);
 	for(unsigned i = 0; i < 4; i++) chacha[i+2] ^= le32toh(s->addr.dwords[i]);
 	for(unsigned i = 0; i < 4; i++) chacha[i+6] ^= le32toh(to->addr.dwords[i]);
 	chacha[10] ^= (uint32_t)(le16toh(s->port_le)<<16 | to->port);
-	chacha[11] ^= le32toh(knonce[0]);
+	chacha[11] ^= (uint32_t)t; // == le32toh(knonce[0]);
 	for(unsigned i = 0; i < 4; i++) chacha[12+i] = le32toh(knonce[i+1]);
 	ChaCha20_block(chacha);
 	memcpy(out_tag, chacha, 32);
 	if(out_xor) for(unsigned i = 0; i < xor_count; i++) out_xor[i] ^= chacha[i+8];
 }
-static inline uint64_t _hv_consume_signed_auth(hivemind_server_t* s, const remote_t* from, const uint32_t knonce[static restrict 5], uint32_t out_tag[static restrict 8], uint32_t* restrict out_xor, unsigned xor_count){
+static inline uint64_t _hv_consume_signed_auth(hivemind_server_t* s, const remote_t* from, const uint32_t knonce[static restrict 5], uint32_t out_tag[static restrict 8], uint32_t* restrict out_xor, unsigned xor_count, uint64_t t){
 	uint32_t chacha[16] = {0x2d6d6172, 0x6b636170, 0x6b206465, 0x68637865}; // "ram-packed kexch"
-	memcpy(chacha+4, s->master_key, 32);
+	uint64_t t1 = (uint64_t)le32toh(knonce[0])<<24 | (uint64_t)(le32toh(knonce[1])&0xffffff);
+	if((t > t1 ? t-t1 : t1-t) > _HV_STATE_LIFETIME/1000) return 0;
+	if(!_hv_get_master_key(s, t, t1, chacha+4)) return 0;
 	for(unsigned i = 0; i < 4; i++) chacha[i+2] ^= le32toh(from->addr.dwords[i]);
 	for(unsigned i = 0; i < 4; i++) chacha[i+6] ^= le32toh(s->addr.dwords[i]);
 	chacha[10] ^= (uint32_t)(from->port<<16 | le16toh(s->port_le));
@@ -254,24 +258,6 @@ static inline uint64_t _hv_consume_signed_auth(hivemind_server_t* s, const remot
 	ChaCha20_block(chacha);
 	memcpy(out_tag, chacha, 32);
 	if(out_xor) for(unsigned i = 0; i < xor_count; i++) out_xor[i] ^= chacha[i+8];
-	return (uint64_t)le32toh(knonce[0])<<24 | (uint64_t)(le32toh(knonce[1])&0xffffff);
-}
-
-static void _hv_ram_packed_kex(hivemind_server_t* s, struct _hv_remote* state, uint32_t out_packet[static restrict 5]){
-	remote_t to = {.addr = state->addr, .port = state->port};
-	_hv_make_signed_auth(s, &to, out_packet, state->send_key, 0, 0);
-}
-
-static uint64_t _hv_ram_packed_kex_verify(hivemind_server_t* s, const remote_t* from, uint32_t out_key[static restrict 8], const uint32_t in_packet[static restrict 5]){
-	uint64_t t = epoch_now()/MILLISECOND_US, t1 = _hv_consume_signed_auth(s, from, in_packet, out_key, 0, 0);
-	if((t > t1 ? t-t1 : t1-t) > _HV_STATE_LIFETIME/1000) return 0;
-#ifndef HIVEMIND_NO_RECV_TSF
-	#ifdef THREAD_SPECULATION_FENCE_AVAILABLE
-		thread_speculation_fence();
-	#elif !defined(WNO_THREAD_SFENCE_MISSING) // to be supplied via -D
-		#warning Thread speculation fence unavailable on this architecture
-	#endif
-#endif
 	return t1;
 }
 
@@ -448,7 +434,7 @@ static void _hv_encrypt_packet(uint32_t chacha[16], struct _hv_send_packet* p){
 
 static inline void _hv_standalone_packet_finish(hivemind_server_t* s, const remote_t* to, uint8_t* packet, unsigned payload_len, uint32_t opts){
 	uint32_t poly_key[8];
-	_hv_make_signed_auth(s, to, (uint32_t*)(packet+20), poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2);
+	_hv_make_signed_auth(s, to, (uint32_t*)(packet+20), poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2, epoch_now()/MILLISECOND_US);
 	*(uint32_t*)(packet+16) = *(uint32_t*)(packet+20);
 	*(uint32_t*)(packet+20) = htole32(opts<<8);
 	uint32_t knonce4 = *(uint32_t*)(packet+36);
@@ -668,7 +654,7 @@ static inline void _hv_finish(hivemind_server_t* s){
 	s->buckets_exp = 0;
 }
 
-static inline void _hivemind_resolve_key(uint32_t state[16], uint32_t epoch){
+static void _hivemind_resolve_key(uint32_t state[16], uint32_t epoch){
 	uint32_t old_epoch = state[0];
 	if(old_epoch >= epoch) return;
 	if((epoch>>15) != (old_epoch>>15)){
@@ -693,4 +679,50 @@ static inline void _hivemind_resolve_key(uint32_t state[16], uint32_t epoch){
 		for(unsigned i = 1; i < 8; i++) state[i] = le32toh(out[i] ^ out[i+8]);
 		state[0] = ++old_epoch;
 	}
+}
+
+static inline uint32_t _hv_get_master_key_epoch(hivemind_server_t* s, uint32_t expected_epoch, uint32_t cur_epoch){
+	got_epoch:
+	if(!cur_epoch){
+		thread_yield();
+		cur_epoch = atomic_load_explicit(&s->master_key_state[0], memory_order_relaxed);
+		goto got_epoch;
+	}
+	if(cur_epoch < expected_epoch){
+		if(!atomic_compare_exchange_weak_explicit(s->master_key_state+0, &cur_epoch, 0, memory_order_acquire, memory_order_relaxed))
+			goto got_epoch;
+		uint32_t state[16];
+		for(unsigned i = 0; i < 16; i++) state[i] = atomic_load_explicit(s->master_key_next+i, memory_order_relaxed);
+		if((cur_epoch>>15) == (expected_epoch>>15)){
+			for(unsigned i = 0; i < 8; i++) state[i+8] = atomic_load_explicit(s->master_key_next+i, memory_order_relaxed) ^ state[i];
+		}else _hivemind_resolve_key(state, expected_epoch);
+		for(unsigned i = 1; i < 16; i++) atomic_store_explicit(s->master_key_state+i, state[i], memory_order_relaxed);
+		_hivemind_resolve_key(state, expected_epoch+1);
+		for(unsigned i = 0; i < 8; i++) atomic_store_explicit(s->master_key_next+i, state[i] ^ state[i+8], memory_order_relaxed);
+		atomic_store_explicit(s->master_key_state+0, expected_epoch, memory_order_release);
+		cur_epoch = expected_epoch;
+	}
+	return cur_epoch;
+}
+static inline bool _hv_get_master_key(hivemind_server_t* s, uint64_t t, uint64_t t1, uint32_t out[32]){
+	uint32_t epoch = (uint32_t)(t1 >> 24);
+	uint32_t expected_epoch = (uint32_t)((t-0x800000) >> 24);
+	uint32_t cur_epoch = atomic_load_explicit(s->master_key_state+0, memory_order_relaxed);
+	retry:
+	cur_epoch = _hv_get_master_key_epoch(s, expected_epoch, cur_epoch);
+	thread_memory_barrier(mb_acquire);
+	bool success = true;
+	if(epoch == cur_epoch){
+		for(unsigned i = 0; i < 8; i++){
+			out[i] = atomic_load_explicit(s->master_key_state+i, memory_order_relaxed) ^ atomic_load_explicit(s->master_key_state+i+8, memory_order_relaxed);
+		}
+	}else{
+		for(unsigned i = 0; i < 8; i++) out[i] = atomic_load_explicit(s->master_key_next+i, memory_order_relaxed);
+		success = epoch == cur_epoch+1;
+	}
+	thread_memory_barrier(mb_co_release);
+	uint32_t old_epoch = cur_epoch;
+	cur_epoch = atomic_load_explicit(s->master_key_state+0, memory_order_relaxed);
+	if(cur_epoch != old_epoch) goto retry; // seq lock
+	return success;
 }

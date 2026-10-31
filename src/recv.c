@@ -636,25 +636,25 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 			hdr[1] = hdr[0];
 			uint32_t tag[4], *ptag = (uint32_t*)packet;
 			uint32_t poly_key[8];
-			uint64_t t = epoch_now()/MILLISECOND_US;
-			uint64_t t1 = _hv_consume_signed_auth(s, &from, hdr+1, poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2);
-			if((t > t1 ? t-t1 : t1-t) > _HV_STATE_LIFETIME/1000)
+			uint64_t kdw = _hv_consume_signed_auth(s, &from, hdr+1, poly_key, (uint32_t*)(packet+40), payload_len > 32 ? 8 : payload_len>>2, epoch_now()/MILLISECOND_US);
+			if(!kdw)
 				continue; // replay
 			*(uint32_t*)(packet+36) = htole32(opts<<8);
 			if(payload_len) Poly1305(packet+36, payload_len+4, (uint8_t*)poly_key, (uint8_t*)tag);
 			else memcpy(tag, poly_key, 16);
 			if(memcmp16(tag, ptag))
 				continue; // sig failed
+			_hv_tsf();
 			struct _hv_remote* state = _hv_state_find(s, from.addr, from.port, _HV_FIND_CREATE);
 			if(!state) continue;
 			uint64_t l = _hv_time_lock_acq(&state->recv_last_used);
 			// Prevent replay attack
-			if(t1 <= state->key_derived_when){
+			if(kdw <= state->key_derived_when){
 				_hv_time_lock_rel(&state->recv_last_used, l);
 				shared_lock_release(&s->state_lock);
 				continue;
 			}
-			state->key_derived_when = t1;
+			state->key_derived_when = kdw;
 			_hv_time_lock_rel(&state->recv_last_used, _hv_internal_clock());
 			if(opts&2){
 				if(payload_len != 40){
@@ -698,8 +698,8 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 			header = 64;
 			// New connection requested
 			// We should really reject invalid new connections as soon as possible
-			// This is what _hv_ram_packed_kex_verify does
-			kdw = _hv_ram_packed_kex_verify(s, &from, chacha_in+4, (uint32_t*)(packet+16));
+			// This is what _hv_consume_signed_auth does
+			kdw = _hv_consume_signed_auth(s, &from, (uint32_t*)(packet+16), chacha_in+4, 0, 0, epoch_now()/MILLISECOND_US);
 			if(!kdw) continue;
 		}
 		struct _hv_remote* state = _hv_state_find(s, from.addr, from.port, !!kdw);
@@ -762,6 +762,7 @@ static uint8_t* _hv_drain_reads(hivemind_server_t* s, uint8_t* packet, unsigned 
 			_hv_time_lock_rel(&state->recv_last_used, l);
 			continue; // poly failed
 		}
+		_hv_tsf();
 		chacha_in[12] = 0;
 		ChaCha20_block_xor(chacha_in, payload, plen>>6);
 		if(len != UINT64_MAX){

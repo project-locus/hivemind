@@ -18,7 +18,7 @@ static inline void _hv_hazard_wait(void* target){
 	}
 }
 
-#define GC_FREQ (3600*SECOND_US)
+#define _HV_GC_FREQ (1800*SECOND_US)
 
 // Listener thread autoscaling
 #define _HV_SCALE_SAMPLE (250*MILLISECOND_US) // How often each thread flushes its CPU time
@@ -194,7 +194,7 @@ static void* _hv_listen(void* _){
 					goto recv_packet;
 				} // if changed, another wakeup will handle it
 			}
-			uint64_t wake = GC_FREQ;
+			uint64_t wake = _HV_GC_FREQ;
 			// early test
 			if((uintptr_t)atomic_load_explicit(&_hv_meta.unsent_ack, memory_order_relaxed) > 1){
 				struct _hv_remote* state = atomic_exchange_explicit(&_hv_meta.unsent_ack, 0, memory_order_acquire), *head = state;
@@ -263,15 +263,18 @@ static void* _hv_listen(void* _){
 			}
 			uint64_t last_gc = atomic_load_explicit(&_hv_meta.last_gc, memory_order_relaxed);
 			uint64_t tim = _hv_internal_clock();
-			if unlikely(s_s && last_gc != -1ull && tim - last_gc > GC_FREQ && atomic_compare_exchange_strong_explicit(&_hv_meta.last_gc, &last_gc, -1ull, memory_order_acquire, memory_order_relaxed)){
+			if unlikely(s_s && last_gc != -1ull && tim - last_gc > _HV_GC_FREQ && atomic_compare_exchange_strong_explicit(&_hv_meta.last_gc, &last_gc, -1ull, memory_order_acquire, memory_order_relaxed)){
 				for(;;){
 					atomic_store_explicit(&self.hazard, s_s, memory_order_relaxed);
 					thread_memory_barrier(mb_co_acquire);
 					hivemind_server_t* s2 = atomic_load_explicit(&_hv_meta.servers, memory_order_acquire);
 					if(s2 == s_s) break;
 				}
+				uint32_t epoch = (uint32_t)((epoch_now()/MILLISECOND_US - 0x800000)>>24);
 				while(s_s){
 					_hv_remove_unused(s_s, tim);
+					// refresh master key ratchet
+					_hv_get_master_key_epoch(s_s, epoch, atomic_load_explicit(s_s->master_key_state+0, memory_order_relaxed));
 					atomic_store_explicit(&self.hazard, (void*)-1ull, memory_order_relaxed);
 					thread_memory_barrier(mb_co_acquire);
 					s_s = atomic_load_explicit(&s_s->next, memory_order_acquire);
